@@ -17,7 +17,7 @@ pub const PdfName = struct {
     /// This is what should be written to the PDF file.
     encoded: ?[]const u8,
     /// PdfNames are always direct objects, not indirect references.
-    indirect: bool = 0,
+    indirect: bool = false,
 
     const whitespace_chars = "\x00\x09\x0A\x0C\x0D\x20";
     const delimiter_chars = "()<>{}[]/%";
@@ -54,11 +54,11 @@ pub const PdfName = struct {
 
         for (name_str) |c| {
             if (needs_escape(c)) {
-                try buff.append("#");
-                var hex_index: [2]u8 = undefined;
+                try buff.append('#');
+                var hex_digits: [2]u8 = undefined;
 
-                _ = std.fmt.bufPrint(buff, "{x:0>2}", .{c}) catch unreachable;
-                try buff.appendSlice(&hex_index);
+                _ = std.fmt.bufPrint(&hex_digits, "{x:0>2}", .{c}) catch unreachable;
+                try buff.appendSlice(&hex_digits);
             } else {
                 try buff.append(c);
             }
@@ -129,7 +129,7 @@ pub const PdfName = struct {
         } else {
             return .{
                 .value = name_with_slash,
-                .encoded = allocator.dupe(u8, potential_encode),
+                .encoded = try allocator.dupe(u8, potential_encode),
             };
         }
     }
@@ -147,7 +147,7 @@ pub const PdfName = struct {
             return pdfNameError.InvalidPdfNameFormat;
         }
 
-        if (std.mem.indexOf(u8, full_pdf_name, "#")) {
+        if (std.mem.indexOf(u8, full_pdf_name, "#")) |_| {
             const decoded_name = try decode_name(allocator, full_pdf_name);
             if (std.mem.eql(u8, decoded_name, full_pdf_name)) {
                 return .{
@@ -156,19 +156,19 @@ pub const PdfName = struct {
                 };
             } else {
                 return .{
-                    .value = allocator.dupe(u8, full_pdf_name),
-                    .encode = null,
+                    .value = try allocator.dupe(u8, full_pdf_name),
+                    .encoded = null,
                 };
             }
         } else {
             return .{
-                .value = allocator.dupe(u8, full_pdf_name),
+                .value = try allocator.dupe(u8, full_pdf_name),
                 .encoded = null,
             };
         }
     }
 
-    pub fn deinit(self: *PdfName, allocator: Allocator) void {
+    pub fn deinit(self: *const PdfName, allocator: Allocator) void {
         allocator.free(self.value);
         if (self.encoded) |e| allocator.free(e);
     }
