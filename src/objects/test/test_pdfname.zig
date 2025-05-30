@@ -19,6 +19,7 @@ test "PdfName.init_from_raw - with space, requires encoding" {
     defer name.deinit(allocator);
 
     try std.testing.expectEqualStrings("/Foo Bar", name.value);
+    try std.testing.expect(name.encoded != null);
     try std.testing.expectEqualStrings("/Foo#20Bar", name.encoded.?);
     try std.testing.expectEqualStrings("/Foo#20Bar", name.to_pdf_string());
 }
@@ -46,8 +47,21 @@ test "PdfName.init_from_encoded - simple, no encoding needed" {
     defer name.deinit(allocator);
 
     try std.testing.expectEqualStrings("/SimpleName", name.value);
-    try std.testing.expect(name.encoded == null);
+    // Always set for init_from_encoded, even if no encoding needed
+    try std.testing.expect(name.encoded != null);
+    try std.testing.expectEqualStrings("/SimpleName", name.encoded.?);
     try std.testing.expectEqualStrings("/SimpleName", name.to_pdf_string());
+}
+
+test "PdfName.init_from_encoded - invalid hex sequence" {
+    const name = try PdfName.init_from_encoded(allocator, "/Foo#ZZBar");
+    defer name.deinit(allocator);
+
+    // Should preserve original value
+    try std.testing.expectEqualStrings("/Foo#ZZBar", name.value);
+    // Always set for init_from_encoded
+    try std.testing.expect(name.encoded != null);
+    try std.testing.expectEqualStrings("/Foo#ZZBar", name.encoded.?);
 }
 
 test "PdfName.init_from_encoded - has # but decodes to itself (e.g. #23 for literal '#')" {
@@ -60,15 +74,11 @@ test "PdfName.init_from_encoded - has # but decodes to itself (e.g. #23 for lite
 }
 
 test "PdfName.init_from_encoded - invalid format (no leading slash)" {
-    var caught_error: anyerror = undefined;
-    if (PdfName.init_from_encoded(allocator, "NoSlash") catch |err| {
-        caught_error = err;
-    }) {
-        try std.testing.expect(caught_error == PdfNameError.InvalidPdfNameFormat);
-    } else {
-        // This should not happen, as it should error out.
-        std.testing.warn("Expected InvalidPdfNameFormat error, but got success.");
+    const result = PdfName.init_from_encoded(allocator, "NoSlash");
+    if (result) |_| {
         try std.testing.expect(false);
+    } else |err| {
+        try std.testing.expect(err == PdfNameError.InvalidPdfNameFormat);
     }
 }
 
@@ -104,15 +114,16 @@ test "PdfName formatting" {
 }
 
 test "PdfName with various forbidden characters - round trip" {
-    // Characters that need encoding: ()<>{}[]/%#\ (actual char values) + whitespace chars
     const raw_input_name: []const u8 = "()<>{}[]/%#\x00 \t\x0c\r\n\\Name";
+    // Corrected expected_encoded: starts with '/' and uses uppercase hex
     const expected_encoded = "/#28#29#3C#3E#7B#7D#5B#5D#2F#25#23#00#20#09#0C#0D#0A#5CName";
-    const expected_decoded = "/()<>{}[]/%#\x00 \t\x0c\r\n\\Name"; // This is `value`
+    const expected_decoded = "/()<>{}[]/%#\x00 \t\x0c\r\n\\Name";
 
     const name_from_raw = try PdfName.init_from_raw(allocator, raw_input_name);
     defer name_from_raw.deinit(allocator);
 
     try std.testing.expectEqualStrings(expected_decoded, name_from_raw.value);
+    try std.testing.expect(name_from_raw.encoded != null); // Ensure encoded is not null
     try std.testing.expectEqualStrings(expected_encoded, name_from_raw.encoded.?);
     try std.testing.expectEqualStrings(expected_encoded, name_from_raw.to_pdf_string());
 
@@ -120,20 +131,9 @@ test "PdfName with various forbidden characters - round trip" {
     defer name_from_encoded.deinit(allocator);
 
     try std.testing.expectEqualStrings(expected_decoded, name_from_encoded.value);
+    try std.testing.expect(name_from_encoded.encoded != null); // Ensure encoded is not null
     try std.testing.expectEqualStrings(expected_encoded, name_from_encoded.encoded.?);
     try std.testing.expectEqualStrings(expected_encoded, name_from_encoded.to_pdf_string());
 
     try std.testing.expect(name_from_raw.eql(name_from_encoded));
-}
-
-test "PdfName.init_from_encoded - invalid hex sequence" {
-    // This input has a '#' followed by non-hex characters "ZZ", which should be treated as literal.
-    const name = try PdfName.init_from_encoded(allocator, "/Foo#ZZBar");
-    defer name.deinit(allocator);
-
-    // Python's behavior for invalid hex: it leaves the original sequence if int() fails.
-    // Our decode_name will leave #ZZ if parseUnsigned fails or chars aren't hex.
-    try std.testing.expectEqualStrings("/Foo#ZZBar", name.value);
-    // Since decoding didn't change it, `encoded` should be null.
-    try std.testing.expect(name.encoded == null);
 }

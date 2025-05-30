@@ -43,22 +43,14 @@ pub const PdfName = struct {
         return true;
     }
 
-    /// Encodes a raw string into a PDF-compatible name string with #XX escapes.
-    /// E.g., "/Foo Bar" -> "/Foo#20Bar"
-    /// The input `name_str` is assumed to include the leading slash if applicable.
-    /// Returns the encoded string.
-    /// This function needs an allocator because the result might be larger.
+    /// Encodes only the name portion (without slash)
     pub fn encode_name(allocator: Allocator, name_str: []const u8) ![]const u8 {
         var buff = std.ArrayList(u8).init(allocator);
         errdefer buff.deinit();
 
         for (name_str) |c| {
             if (needs_escape(c)) {
-                try buff.append('#');
-                var hex_digits: [2]u8 = undefined;
-
-                _ = std.fmt.bufPrint(&hex_digits, "{x:0>2}", .{c}) catch unreachable;
-                try buff.appendSlice(&hex_digits);
+                try buff.writer().print("#{X:0>2}", .{c});
             } else {
                 try buff.append(c);
             }
@@ -67,34 +59,30 @@ pub const PdfName = struct {
         return buff.toOwnedSlice();
     }
 
-    /// Decodes a PDF name string containing #XX escapes into its raw form.
-    /// E.g., "/Foo#20Bar" -> "/Foo Bar"
-    /// The input `name_str` is assumed to include the leading slash if applicable.
-    /// Returns the decoded string.
-    /// This function needs an allocator because the result might be larger or smaller.
-    pub fn decode_name(allocator: Allocator, name_str: []const u8) ![]const u8 {
+    /// Decodes only the name portion (without slash)
+    pub fn decode_name(allocator: Allocator, name_part_encoded: []const u8) ![]const u8 {
         var buff = std.ArrayList(u8).init(allocator);
         errdefer buff.deinit();
 
         var i: usize = 0;
-        while (i < name_str.len) {
-            if (name_str[i] == '#' and i + 2 < name_str.len) {
-                const hex_slice = name_str[i + 1 .. i + 3];
-                if (!std.ascii.isHex(hex_slice[0]) or !std.ascii.isHex(hex_slice[i])) {
-                    try buff.append(hex_slice[i]);
+        while (i < name_part_encoded.len) {
+            if (name_part_encoded[i] == '#') {
+                if (i + 2 < name_part_encoded.len) {
+                    const hex_pair = name_part_encoded[i + 1 .. i + 3];
+                    if (std.ascii.isHex(hex_pair[0]) and std.ascii.isHex(hex_pair[1])) {
+                        const char_code = try std.fmt.parseUnsigned(u8, hex_pair, 16);
+                        try buff.append(char_code);
+                        i += 3;
+                    } else {
+                        try buff.append('#');
+                        i += 1;
+                    }
+                } else {
+                    try buff.append('#');
                     i += 1;
-                    continue;
                 }
-                const char_code = std.fmt.parseUnsigned(u8, hex_slice, 16) catch {
-                    try buff.append(hex_slice[i]);
-                    i += 1;
-                    continue;
-                };
-
-                try buff.append(char_code);
-                i += 3;
             } else {
-                try buff.append(name_str[i]);
+                try buff.append(name_part_encoded[i]);
                 i += 1;
             }
         }
@@ -110,28 +98,22 @@ pub const PdfName = struct {
     ///
     /// This factory method mimics `PdfName('FooBar')` or `PdfName.FooBar` in Python.
     pub fn init_from_raw(allocator: Allocator, name_without_slash: []const u8) !PdfName {
-        var full_name_buf = std.ArrayList(u8).init(allocator);
-        errdefer full_name_buf.deinit();
-
-        try full_name_buf.append('/');
-        try full_name_buf.appendSlice(name_without_slash);
-
-        const name_with_slash = try full_name_buf.toOwnedSlice();
-
-        const potential_encode = try encode_name(allocator, name_with_slash);
+        const potential_encode = try encode_name(allocator, name_without_slash);
         defer allocator.free(potential_encode);
 
-        if (std.mem.eql(u8, potential_encode, name_with_slash)) {
-            return .{
-                .value = name_with_slash,
-                .encoded = null,
-            };
-        } else {
-            return .{
-                .value = name_with_slash,
-                .encoded = try allocator.dupe(u8, potential_encode),
-            };
+        const needs_encoding = !std.mem.eql(u8, potential_encode, name_without_slash);
+
+        const value = try std.fmt.allocPrint(allocator, "/{s}", .{name_without_slash});
+
+        var full_encoded: ?[]const u8 = null;
+        if (needs_encoding) {
+            full_encoded = try std.fmt.allocPrint(allocator, "/{s}", .{potential_encode});
         }
+
+        return PdfName{
+            .value = value,
+            .encoded = full_encoded,
+        };
     }
 
     /// Creates a new PdfName instance from a string read directly from a PDF file.
@@ -143,29 +125,23 @@ pub const PdfName = struct {
     /// This is for when you read `/Some#20Name` from a file and want the `value` to be `/Some Name`.
     pub fn init_from_encoded(allocator: Allocator, full_pdf_name: []const u8) !PdfName {
         if (full_pdf_name.len == 0 or full_pdf_name[0] != '/') {
-            std.log.warn("PdfName.init_from_encoded recieved invalid name \n", .{});
+            std.log.warn("PdfName.init_from_encoded recieved invalid name format: {s}\n", .{full_pdf_name});
             return pdfNameError.InvalidPdfNameFormat;
         }
 
-        if (std.mem.indexOf(u8, full_pdf_name, "#")) |_| {
-            const decoded_name = try decode_name(allocator, full_pdf_name);
-            if (std.mem.eql(u8, decoded_name, full_pdf_name)) {
-                return .{
-                    .value = decoded_name,
-                    .encoded = try allocator.dupe(u8, full_pdf_name),
-                };
-            } else {
-                return .{
-                    .value = try allocator.dupe(u8, full_pdf_name),
-                    .encoded = null,
-                };
-            }
-        } else {
-            return .{
-                .value = try allocator.dupe(u8, full_pdf_name),
-                .encoded = null,
-            };
-        }
+        const name_part_encoded = full_pdf_name[1..];
+        const decoded_name_part = try decode_name(allocator, name_part_encoded);
+        defer allocator.free(decoded_name_part);
+
+        const final_value = try std.fmt.allocPrint(allocator, "/{s}", .{decoded_name_part});
+        errdefer allocator.free(final_value);
+
+        const encoded_copy = try allocator.dupe(u8, full_pdf_name);
+
+        return .{
+            .value = final_value,
+            .encoded = encoded_copy,
+        };
     }
 
     pub fn deinit(self: *const PdfName, allocator: Allocator) void {
