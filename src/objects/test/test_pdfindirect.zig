@@ -122,30 +122,29 @@ test "PdfIndirect.real_value - loader error propagation" {
 
 test "PdfIndirect.eql" {
     const allocator = std.testing.allocator;
+    mock_loader_call_count = 0;
+    mock_loader_should_fail = false;
+
     // Create instances with varying loader/value states to ensure they don't affect equality
     const indirect1_0_a = PdfIndirect.init(1, 0, mockPdfLoader);
-    const indirect1_0_b = PdfIndirect.init(1, 0, mockPdfLoader); // Same ref
-    const indirect2_0 = PdfIndirect.init(2, 0, mockPdfLoader); // Different obj_num
-    const indirect1_1 = PdfIndirect.init(1, 1, mockPdfLoader); // Different gen_num
-
+    const indirect1_0_b = PdfIndirect.init(1, 0, mockPdfLoader);
+    const indirect2_0 = PdfIndirect.init(2, 0, mockPdfLoader);
+    const indirect1_1 = PdfIndirect.init(1, 1, mockPdfLoader);
     var indirect1_0_loaded_a = PdfIndirect.init(1, 0, mockPdfLoader);
-    _ = try indirect1_0_loaded_a.real_value(allocator); // Load this one
+    _ = try indirect1_0_loaded_a.real_value(allocator);
 
     var indirect1_0_loaded_b = PdfIndirect.init(1, 0, mockPdfLoader);
-    _ = try indirect1_0_loaded_b.real_value(allocator); // Load this one too
+    _ = try indirect1_0_loaded_b.real_value(allocator);
 
     // Test equality based on reference
-    try std.testing.expect(indirect1_0_a.eql(indirect1_0_b)); // Two un-loaded, same ref
-    try std.testing.expect(indirect1_0_a.eql(indirect1_0_loaded_a)); // Un-loaded vs loaded, same ref
-    try std.testing.expect(indirect1_0_loaded_a.eql(indirect1_0_loaded_b)); // Two loaded, same ref
-    try std.testing.expect(indirect1_0_a.eql(indirect1_0_a)); // Self-equality
+    try std.testing.expect(indirect1_0_a.eql(indirect1_0_b));
+    try std.testing.expect(indirect1_0_a.eql(indirect1_0_loaded_a));
+    try std.testing.expect(indirect1_0_loaded_a.eql(indirect1_0_loaded_b));
+    try std.testing.expect(indirect1_0_a.eql(indirect1_0_a));
 
-    // Test inequality - different obj_num
     try std.testing.expect(!indirect1_0_a.eql(indirect2_0));
 
-    // Test inequality - different gen_num
     try std.testing.expect(!indirect1_0_a.eql(indirect1_1));
 
-    // Test inequality - both different
     try std.testing.expect(!indirect2_0.eql(indirect1_1));
 }
