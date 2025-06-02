@@ -45,7 +45,7 @@ pub const PdfIndirect = struct {
     /// This function takes a pointer to the `PdfIndirect` instance itself
     /// (to access its `ref` field) and an allocator.
     /// It should return a pointer to the loaded object, or an error.
-    loader: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!*anyopaque,
+    loader: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*anyopaque,
 
     /// Initializes a PdfIndirect object.
     ///
@@ -59,7 +59,7 @@ pub const PdfIndirect = struct {
     pub fn init(
         obj_num: u32,
         gen_num: u32,
-        loader_fn: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!*anyopaque,
+        loader_fn: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*anyopaque,
     ) PdfIndirect {
         return .{
             .ref = ObjectReference.init(obj_num, gen_num),
