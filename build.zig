@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const test_objects_mod = b.createModule(.{
-        .root_source_file = b.path("src/objects/test_objects.zig"),
+        .root_source_file = b.path("src/objects/test_mod.zig"),
         .target = target,
         .optimize = optimize,
     });
