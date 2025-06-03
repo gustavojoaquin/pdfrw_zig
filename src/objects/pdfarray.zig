@@ -6,9 +6,9 @@ const pdfindirect = @import("pdfindirect.zig");
 const PdfObject = pdfobject.PdfObject;
 const PdfIndirect = pdfindirect.PdfIndirect;
 
-const PdfArrayItem = union(enum) {
+pub const PdfArrayItem = union(enum) {
     unresolved: *PdfIndirect,
-    resolved: PdfObject,
+    resolved: *PdfObject,
 };
 
 pub const PdfArray = struct {
@@ -28,7 +28,7 @@ pub const PdfArray = struct {
         while (i < self.item.items.len) : (i += 1) {
             const item_in_array_ptr = &self.item.items[i];
             switch (item_in_array_ptr.*) {
-                .resolved => |*resolved_object_ptr| {
+                .resolved => |resolved_object_ptr| {
                     resolved_object_ptr.deinit(self.allocator);
                 },
                 .unresolved => {},
@@ -41,55 +41,50 @@ pub const PdfArray = struct {
     fn ensureResolved(self: *PdfArray) !void {
         if (self.has_been_resolved) return;
 
-        const pdf_null_obj_ptr_const = try PdfObject.init(self.allocator, "null");
-        const pdf_null_obj_const = pdf_null_obj_ptr_const.*;
-
         var i: usize = 0;
-
         while (i < self.item.items.len) : (i += 1) {
-            var current_item_ptr = &self.item.items[i];
+            const current_item_ptr = &self.item.items[i];
             switch (current_item_ptr.*) {
-                .unresolved => |indirect_obj| {
-                    const resolved_obj_maybe = indirect_obj.real_value(self.allocator) catch |err| {
-                        std.debug.print("PdfArray resolver: Error loading indirect object: {any}\n", .{err});
-                        const new_item_ptr = try self.allocator.create(PdfArrayItem);
-                        new_item_ptr.* = .{ .resolved = pdf_null_obj_const };
-                        current_item_ptr = new_item_ptr;
-                        continue;
-                    };
+                .unresolved => |indirect| {
+                    const resolved_result = indirect.real_value(self.allocator);
+                    var loaded_obj_to_store: ?*PdfObject = null;
 
-                    if (resolved_obj_maybe) |resolved| {
-                        current_item_ptr.* = .{ .resolved = resolved.* };
-                    } else {
-                        current_item_ptr = .{ .resolved = pdf_null_obj_const };
+                    if (resolved_result) |loaded_obj_optional| {
+                        loaded_obj_to_store = loaded_obj_optional;
+                    } else |err| {
+                        std.debug.print("Error resolving indirect {d} {d} R: {any}\n", .{ indirect.ref.obj_num, indirect.ref.gen_num, err });
                     }
+
+                    current_item_ptr.* = if (loaded_obj_to_store) |obj|
+                        .{ .resolved = obj }
+                    else
+                        .{ .resolved = try PdfObject.init(self.allocator, "null") };
                 },
                 .resolved => {},
             }
         }
         self.has_been_resolved = true;
     }
-
     /// Appends an unresolved PdfIndirect object.
     pub fn appendIndirect(self: *PdfArray, indirect_obj: *PdfIndirect) !void {
         try self.item.append(.{ .unresolved = indirect_obj });
     }
 
     /// Appends an already resolved PdfObject.
-    pub fn appendObject(self: *PdfArray, obj: PdfObject) !void {
+    /// Note: `obj` should be a pointer, and PdfArray will now own it.
+    pub fn appendObject(self: *PdfArray, obj: *PdfObject) !void {
         try self.item.append(.{ .resolved = obj });
     }
 
     /// Extends the array with items from a slice.
-    pub fn extend(self: *PdfArray, items: []PdfArrayItem) !void {
+    pub fn extend(self: *PdfArray, items: []const PdfArrayItem) !void {
         try self.item.appendSlice(items);
     }
 
     pub fn get(self: *PdfArray, index: usize) !*PdfObject {
         try self.ensureResolved();
-
         return switch (self.item.items[index]) {
-            .resolved => |obj| &obj,
+            .resolved => |obj_ptr| obj_ptr,
             .unresolved => unreachable,
         };
     }
@@ -98,11 +93,12 @@ pub const PdfArray = struct {
         return self.item.items.len;
     }
 
-    pub fn pop(self: *PdfArray) !?PdfObject {
-        try self.ensureResolved(self.allocator);
+    pub fn pop(self: *PdfArray) !?*PdfObject {
+        try self.ensureResolved();
+
         if (self.item.pop()) |item| {
             return switch (item) {
-                .resolved => |obj| obj,
+                .resolved => |obj_ptr| obj_ptr,
                 .unresolved => unreachable,
             };
         }
@@ -113,11 +109,14 @@ pub const PdfArray = struct {
         array_ptr: *PdfArray,
         next_index: usize,
 
-        pub fn next(self: *Iterator) !?PdfObject {
+        pub fn next(self: *Iterator) !?*PdfObject {
+            if (self.next_index >= self.array_ptr.item.items.len) {
+                return null;
+            }
             const item = self.array_ptr.item.items[self.next_index];
             self.next_index += 1;
             return switch (item) {
-                .resolved => |obj| obj,
+                .resolved => |obj_ptr| obj_ptr,
                 .unresolved => unreachable,
             };
         }
@@ -128,14 +127,14 @@ pub const PdfArray = struct {
         return .{ .array_ptr = self, .next_index = 0 };
     }
 
-    pub fn count(self: *PdfArray, item_to_count: PdfObject) !u32 {
+    pub fn count(self: *PdfArray, item_to_count: *PdfObject) !u32 {
         try self.ensureResolved();
         var c: u32 = 0;
 
         for (self.item.items) |array_item| {
             switch (array_item) {
-                .resolved => |obj| {
-                    if (obj.eql(item_to_count)) {
+                .resolved => |obj_ptr| {
+                    if (obj_ptr.eql(item_to_count)) {
                         c += 1;
                     }
                 },
@@ -145,3 +144,4 @@ pub const PdfArray = struct {
         return c;
     }
 };
+

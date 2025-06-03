@@ -1,4 +1,7 @@
 const std = @import("std");
+const pdfobject = @import("pdfobject.zig"); // Import PdfObject
+
+const PdfObject = pdfobject.PdfObject; // Alias PdfObject
 
 /// A struct to represent the (object number, generation number) tuple.
 /// This is what PdfIndirect *is* in Python's inheritance model.
@@ -14,12 +17,10 @@ pub const ObjectReference = struct {
     /// Formats the ObjectReference for printing (e.g., "(1, 0)").
     pub fn format(
         self: ObjectReference,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        _: []const u8,
+        _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        _ = fmt; // Unused for simple tuple formatting
-        _ = options; // Unused for simple tuple formatting
         try writer.print("({d}, {d})", .{ self.obj_num, self.gen_num });
     }
 
@@ -39,13 +40,13 @@ pub const PdfIndirect = struct {
 
     /// The actual PDF object value, if loaded.
     /// This is `null` if the object has not yet been loaded from the file.
-    value: ?*anyopaque,
+    value: ?*PdfObject,
 
     /// A function pointer to load the actual object from its reference.
     /// This function takes a pointer to the `PdfIndirect` instance itself
     /// (to access its `ref` field) and an allocator.
     /// It should return a pointer to the loaded object, or an error.
-    loader: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*anyopaque,
+    loader: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject,
 
     /// Initializes a PdfIndirect object.
     ///
@@ -59,7 +60,7 @@ pub const PdfIndirect = struct {
     pub fn init(
         obj_num: u32,
         gen_num: u32,
-        loader_fn: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*anyopaque,
+        loader_fn: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject,
     ) PdfIndirect {
         return .{
             .ref = ObjectReference.init(obj_num, gen_num),
@@ -70,24 +71,27 @@ pub const PdfIndirect = struct {
 
     /// Returns the real value of the PDF object, loading it if necessary.
     ///
-    /// This function returns a pointer to the loaded object. The caller
-    /// is responsible for casting this `*anyopaque` pointer to the correct
-    /// PDF object type (e.g., `*PdfDict`, `*PdfArray`, etc.) based on context.
+    /// This function returns a pointer to the loaded object, or `null` if the
+    /// loader function returns `null` (e.g., object not found). It returns an
+    /// error if the loader function itself fails.
     ///
-    /// The `allocator` is passed to the internal `loader` function, in case
-    /// the loaded object needs to be dynamically allocated.
+    /// The caller is responsible for casting this `*PdfObject` pointer to the
+    /// correct PDF object type (e.g., `*PdfDict`, `*PdfArray`, etc.) if PdfObject
+    /// is a base type.
+    ///
+    /// The `allocator` is passed to the internal `loader` function.
     ///
     /// This function is fallible (`anyerror!`) because the `loader` might fail.
     ///
     /// Usage:
-    /// `const loaded_dict = @ptrCast(*PdfDict, try indirect_ref.real_value(my_allocator));`
-    pub fn real_value(self: *PdfIndirect, allocator: std.mem.Allocator) anyerror!*anyopaque {
+    /// `const loaded_obj = try indirect_ref.real_value(my_allocator);`
+    /// `if (loaded_obj) |dict_ptr| { ... } else { // Object not found }`
+    pub fn real_value(self: *PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject { // Return type includes `?`
         if (self.value == null) {
-            // If the object hasn't been loaded yet, call the provided loader function.
-            // The loader function performs the actual parsing/retrieval from the file.
-            self.value = try self.loader(self, allocator);
+            const loaded_obj = try self.loader(self, allocator);
+            self.value = loaded_obj;
         }
-        return self.value.?; // We can safely unwrap now as it's guaranteed not null.
+        return self.value;
     }
 
     /// Checks if two PdfIndirect instances are equal.
@@ -96,3 +100,4 @@ pub const PdfIndirect = struct {
         return self.ref.eql(other.ref);
     }
 };
+
