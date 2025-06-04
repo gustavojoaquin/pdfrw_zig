@@ -69,29 +69,30 @@ pub const PdfIndirect = struct {
         };
     }
 
-    /// Returns the real value of the PDF object, loading it if necessary.
-    ///
-    /// This function returns a pointer to the loaded object, or `null` if the
-    /// loader function returns `null` (e.g., object not found). It returns an
-    /// error if the loader function itself fails.
-    ///
-    /// The caller is responsible for casting this `*PdfObject` pointer to the
-    /// correct PDF object type (e.g., `*PdfDict`, `*PdfArray`, etc.) if PdfObject
-    /// is a base type.
-    ///
-    /// The `allocator` is passed to the internal `loader` function.
-    ///
-    /// This function is fallible (`anyerror!`) because the `loader` might fail.
-    ///
-    /// Usage:
-    /// `const loaded_obj = try indirect_ref.real_value(my_allocator);`
-    /// `if (loaded_obj) |dict_ptr| { ... } else { // Object not found }`
+    /// Returns a pointer to the real value of the PDF object, loading it if necessary.
+    /// The returned pointer points to the `PdfObject` stored within this `PdfIndirect` instance.
+    /// The caller should typically clone this object if it needs to own it or modify it,
+    /// as the `PdfIndirect` instance might be shared or its cached value could change.
     pub fn real_value(self: *PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject { // Return type includes `?`
         if (self.value == null) {
-            const loaded_obj = try self.loader(self, allocator);
-            self.value = loaded_obj;
+            const loaded_obj_opt = try self.loader(self, allocator);
+            if (loaded_obj_opt) |loaded_obj| {
+                self.value = loaded_obj;
+            } else {
+                self.value = null;
+                return null;
+            }
         }
-        return self.value;
+
+        if (self.value) |val_ptr| {
+            return val_ptr;
+        } else {
+            return null;
+        }
+    }
+
+    pub fn deinit(self: *PdfIndirect, allocator: std.mem.Allocator) void {
+        if (self.value) |v| v.deinit(allocator);
     }
 
     /// Checks if two PdfIndirect instances are equal.

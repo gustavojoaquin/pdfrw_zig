@@ -10,6 +10,27 @@ const PdfIndirect = pdfindirect.PdfIndirect;
 const PdfError = errors.PdfError;
 const Allocator = std.mem.Allocator;
 
+pub const PdfElement = union(enum) {
+    Indirect: *PdfIndirect,
+    Resolved: pdfobject.PdfObject,
+
+    pub fn deinit(self: PdfElement, allocator: Allocator) void {
+        switch (self) {
+            .Indirect => |indirect_ptr| {
+                indirect_ptr.deinit(allocator);
+            },
+            .Resolved => |obj| obj.deinit(allocator),
+        }
+    }
+
+    pub fn clone(self: PdfElement, allocator: Allocator) !PdfElement {
+        return switch (self) {
+            .Indirect => |iptr| PdfElement{ .Indirect = iptr },
+            .Resolved => |obj| PdfElement{ .Resolved = try obj.clone(allocator) },
+        };
+    }
+};
+
 pub const PdfDict = struct {
     allocator: Allocator,
     map: std.AutoHashMap(PdfName, PdfObject),
