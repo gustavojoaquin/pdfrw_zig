@@ -26,27 +26,53 @@ pub const PdfDict = struct {
         };
     }
 
+    /// Deinitializes the PdfDict, including all keys and values it owns.
     pub fn deinit(self: *PdfDict) void {
+        var map_iter = self.map.iterator();
+        while (map_iter.next()) |entry| {
+            entry.key_ptr.deinit(self.allocator);
+            entry.value_ptr.deinit(self.allocator);
+        }
         self.map.deinit();
+
+        var priv_attrs_iter = self.private_attrs.iterator();
+        while (priv_attrs_iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
         self.private_attrs.deinit();
     }
 
+    /// Puts a key-value pair into the dictionary.
+    /// If an existing value is replaced, it is deinitialized.
     pub fn put(self: *PdfDict, key: PdfName, value: ?PdfObject) !void {
+        // Deinitialize old value if key already exists
+        if (self.map.get(key)) |old_value| {
+            old_value.deinit(self.allocator);
+        }
+
         if (value) |val| {
             try self.map.put(key, val);
         } else {
-            _ = self.map.remove(key);
+            if (self.map.remove(key)) |removed_value| {
+                removed_value.deinit(self.allocator);
+            }
         }
     }
 
+    /// Retrieves a value from the dictionary.
+    /// If the value is an indirect reference, it attempts to resolve it
+    /// and replaces the indirect reference with the resolved value in the map.
     pub fn get(self: *PdfDict, key: PdfName) !?PdfObject {
         if (self.map.get(key)) |value| {
-            if (value == .indirect_ref) {
-                const resolved = try value.indirect_ref.resolve();
+            // Use meta.activeTag instead of @tag
+            if (std.meta.activeTag(value) == .indirect_ref) {
+                const resolved = try value.indirect_ref.real_value(self.allocator);
                 if (resolved) |resolved_value| {
+                    value.deinit(self.allocator);
                     try self.map.put(key, resolved_value);
                     return resolved_value;
                 } else {
+                    value.deinit(self.allocator);
                     _ = self.map.remove(key);
                     return null;
                 }
@@ -55,10 +81,12 @@ pub const PdfDict = struct {
         }
         return null;
     }
-
+    /// Sets the stream data for the dictionary, and automatically updates the /Length entry.
     pub fn setStream(self: *PdfDict, data: ?[]const u8) !void {
         self.stream = data;
-        const length_key = PdfName.init("/Length");
+        var length_key = try PdfName.init_from_raw(self.allocator, "Length");
+        defer length_key.deinit(self.allocator);
+
         if (data) |d| {
             try self.put(length_key, PdfObject{ .integer = @intCast(d.len) });
         } else {
@@ -70,7 +98,6 @@ pub const PdfDict = struct {
     pub const Iterator = struct {
         inner: std.AutoHashMap(PdfName, PdfObject).Iterator,
         dict: *PdfDict,
-        index: usize = 0,
 
         pub fn next(self: *Iterator) !?Entry {
             while (self.inner.next()) |entry| {
@@ -86,6 +113,8 @@ pub const PdfDict = struct {
         return .{ .inner = self.map.iterator(), .dict = self };
     }
 
+    /// Looks up a key, checking the dictionary itself and its parent chain.
+    /// Resolves indirect references in the process.
     pub fn getInheritable(self: *PdfDict, key: PdfName) !?PdfObject {
         var current: ?*PdfDict = self;
         var visited = std.AutoHashMap(*PdfDict, void).init(self.allocator);
@@ -93,7 +122,7 @@ pub const PdfDict = struct {
 
         while (current) |dict| {
             if (visited.contains(dict)) {
-                return null; // Cycle detected
+                return null;
             }
             try visited.put(dict, {});
 
@@ -105,6 +134,7 @@ pub const PdfDict = struct {
         return null;
     }
 
+    /// Creates a shallow copy of the dictionary (keys and values are copied by value).
     pub fn copy(self: *PdfDict) !PdfDict {
         var new_dict = PdfDict.init(self.allocator);
         new_dict.indirect = self.indirect;
@@ -124,15 +154,23 @@ pub const PdfDict = struct {
         return new_dict;
     }
 
+    /// Sets a private (non-PDF-spec) attribute.
+    /// If an existing value is replaced, it is deinitialized.
     pub fn setPrivate(self: *PdfDict, key: []const u8, value: PdfObject) !void {
+        // Deinitialize old value if key already exists
+        if (self.private_attrs.get(key)) |old_value| {
+            old_value.deinit(self.allocator);
+        }
         try self.private_attrs.put(key, value);
     }
 
+    /// Retrieves a private attribute.
     pub fn getPrivate(self: *PdfDict, key: []const u8) ?PdfObject {
         return self.private_attrs.get(key);
     }
 };
 
+/// Creates a new PdfDict instance marked as indirect.
 pub fn createIndirectPdfDict(allocator: Allocator) PdfDict {
     var dict = PdfDict.init(allocator);
     dict.indirect = true;

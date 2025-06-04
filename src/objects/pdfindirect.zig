@@ -1,7 +1,7 @@
 const std = @import("std");
-const pdfobject = @import("pdfobject.zig"); // Import PdfObject
+const pdfobject = @import("pdfobject.zig");
 
-const PdfObject = pdfobject.PdfObject; // Alias PdfObject
+const PdfObject = pdfobject.PdfObject;
 
 /// A struct to represent the (object number, generation number) tuple.
 /// This is what PdfIndirect *is* in Python's inheritance model.
@@ -100,4 +100,3 @@ pub const PdfIndirect = struct {
         return self.ref.eql(other.ref);
     }
 };
-
