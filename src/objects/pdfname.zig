@@ -172,4 +172,31 @@ pub const PdfName = struct {
     pub fn eql_str(self: PdfName, other_str: []const u8) bool {
         return std.mem.eql(u8, self.value, other_str);
     }
+
+    pub fn hash(self: PdfName) u32 {
+        return std.hash.Crc32.hash(self.value);
+    }
+
+    pub fn clone(self: PdfName, allocator: Allocator) !PdfName {
+        const new_value = try allocator.dupe(u8, self.value);
+        errdefer allocator.free(new_value);
+
+        var new_encoded: ?[]const u8 = null;
+        if (self.encoded) |e| {
+            new_encoded = try allocator.dupe(u8, e);
+            errdefer allocator.free(new_encoded);
+        }
+
+        return PdfName{
+            .value = new_value,
+            .encoded = new_encoded,
+            .indirect = self.indirect,
+        };
+    }
+
+    pub fn clone_to_ptr(self: PdfName, allocator: Allocator) !*PdfName {
+        const ptr = try allocator.create(PdfName);
+        ptr.* = self.clone(allocator);
+        return ptr;
+    }
 };
