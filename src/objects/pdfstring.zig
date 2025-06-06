@@ -1,32 +1,53 @@
+//! This module provides a faithful Zig implementation of Python's `pdfrw.pdfstring` module.
+//! It handles the encoding and decoding of PDF String objects as defined in the PDF 1.7 specification.
+//!
+//! A PDF string can be in one of two formats:
+//! 1.  **Literal String:** Enclosed in parentheses `()`, with special characters escaped by a backslash.
+//! 2.  **Hexadecimal String:** Enclosed in angle brackets `<>`, representing bytes as hex digits.
+//!
+//! Text within a PDF string can have two primary encodings:
+//! 1.  **PDFDocEncoding:** A custom 8-bit encoding similar to Latin-1, with some Adobe-specific characters.
+//! 2.  **UTF-16BE:** Standard UTF-16 Big Endian, identified by a Byte Order Mark (BOM).
+//!
+//! The main type is `PdfString`, which stores the string in its final, encoded format (e.g., `"(Hello)"`).
+//! Use factory functions `fromBytes` or `fromUnicode` to create an encoded `PdfString`.
+//! Use instance methods `toBytes` or `toUnicode` to decode a `PdfString` back to raw bytes or a UTF-8 string.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// Errors that can occur during PDF string parsing, encoding, or decoding.
 pub const PdfStringError = error{
+    /// The input string is not a valid literal `()` or hex `<>` string.
     InvalidPdfStringFormat,
+    /// An invalid non-hexadecimal character was found in a hex string.
     InvalidHexCharacter,
+    /// An invalid or incomplete octal escape sequence (e.g., `\9` or `\`) was found.
     InvalidOctalEscape,
+    /// A character could not be encoded or decoded with the specified text encoding.
     EncodingError,
-    AllocationFailed,
-    OutputTooSmall,
 };
 
 const BOM_UTF16_BE = [_]u8{ 0xFE, 0xFF };
 
+// --- Global State for PDFDocEncoding ---
+// These are lazily initialized on first use to avoid startup cost.
+
 var pdf_doc_encoding_to_unicode_map: [256]u21 = undefined;
-var unicode_to_pdf_doc_encoding_map: std.HashMap(u21, u8, std.hash.IntegerContext(u21), std.hash_map.default_max_load_percentage) = undefined;
+var unicode_to_pdf_doc_encoding_map: std.HashMap(u21, u8, std.hash.IntegerContext(u21), .{}) = undefined;
 var pdf_doc_encoding_initialized: bool = false;
 
-fn initPdfDocEncoding() !void {
+/// Initializes the global mapping tables for PDFDocEncoding.
+/// This function is called automatically when needed.
+fn initPdfDocEncoding(allocator: Allocator) !void {
     if (pdf_doc_encoding_initialized) return;
 
+    // Default to 1:1 mapping for the first 256 characters.
     for (0..256) |i| {
         pdf_doc_encoding_to_unicode_map[i] = @intCast(i);
     }
 
-    // Overrides from PDF 1.7 Spec, Appendix D.2
-    // Standard Latin Character Set and Encodings
-    // Differences from WinAnsiEncoding (which is close to ISO Latin-1)
-    // Entries not in WinAnsiEncoding:
+    // Override with mappings from PDF 1.7 Spec, Appendix D.2.
     pdf_doc_encoding_to_unicode_map[0x18] = 0x02D8; // BREVE
     pdf_doc_encoding_to_unicode_map[0x19] = 0x02C7; // CARON
     pdf_doc_encoding_to_unicode_map[0x1A] = 0x02C6; // MODIFIER LETTER CIRCUMFLEX ACCENT
@@ -35,7 +56,6 @@ fn initPdfDocEncoding() !void {
     pdf_doc_encoding_to_unicode_map[0x1D] = 0x02DB; // OGONEK
     pdf_doc_encoding_to_unicode_map[0x1E] = 0x02DA; // RING ABOVE
     pdf_doc_encoding_to_unicode_map[0x1F] = 0x02DC; // SMALL TILDE
-
     pdf_doc_encoding_to_unicode_map[0x80] = 0x2022; // BULLET
     pdf_doc_encoding_to_unicode_map[0x81] = 0x2020; // DAGGER
     pdf_doc_encoding_to_unicode_map[0x82] = 0x2021; // DOUBLE DAGGER
@@ -43,7 +63,7 @@ fn initPdfDocEncoding() !void {
     pdf_doc_encoding_to_unicode_map[0x84] = 0x2014; // EM DASH
     pdf_doc_encoding_to_unicode_map[0x85] = 0x2013; // EN DASH
     pdf_doc_encoding_to_unicode_map[0x86] = 0x0192; // LATIN SMALL LETTER F WITH HOOK
-    pdf_doc_encoding_to_unicode_map[0x87] = 0x2044; // FRACTION SLASH (Solidus)
+    pdf_doc_encoding_to_unicode_map[0x87] = 0x2044; // FRACTION SLASH
     pdf_doc_encoding_to_unicode_map[0x88] = 0x2039; // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
     pdf_doc_encoding_to_unicode_map[0x89] = 0x203A; // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
     pdf_doc_encoding_to_unicode_map[0x8A] = 0x2212; // MINUS SIGN
@@ -67,55 +87,24 @@ fn initPdfDocEncoding() !void {
     pdf_doc_encoding_to_unicode_map[0x9C] = 0x0153; // LATIN SMALL LIGATURE OE
     pdf_doc_encoding_to_unicode_map[0x9D] = 0x0161; // LATIN SMALL LETTER S WITH CARON
     pdf_doc_encoding_to_unicode_map[0x9E] = 0x017E; // LATIN SMALL LETTER Z WITH CARON
-    // 0x9F is reserved in PDFDocEncoding according to table, maps to 0x009F in WinAnsi.
-    // Python code keeps 0x9F as 0x009F (CONTROL). Let's make it undefined for strictness.
-    // Or, follow Python's "Postel's Law" for decoding and map 0x9F to 0x009F for decoding,
-    // but not for encoding. For simplicity, map to itself for now.
-    // pdf_doc_encoding_to_unicode_map[0x9F] = 0x009F;
-
-    // A0-FF except AD
-    // 0xA0 space (normally NBSP 00A0, but is Euro 20AC in PDFDoc)
     pdf_doc_encoding_to_unicode_map[0xA0] = 0x20AC; // EURO SIGN
+    pdf_doc_encoding_to_unicode_map[0xAD] = 0xFFFD; // SOFT HYPHEN is unassigned, map to REPLACEMENT CHARACTER.
 
-    // 0xAD (SOFT HYPHEN) is unassigned in PDFDocEncoding.
-    // In ISO-8859-1 and WinAnsi, it's U+00AD.
-    // For strictness, it should map to a replacement char or error.
-    // Python's codecs.charmap_decode maps unassigned to U+FFFD (REPLACEMENT CHARACTER) if errors='replace'
-    // or errors out if errors='strict'. For simplicity, map to replacement or just keep 0xAD (byte value)
-    // as it's unlikely to be correctly used. Let's map to replacement for decode.
-    pdf_doc_encoding_to_unicode_map[0xAD] = 0xFFFD; // REPLACEMENT CHARACTER
+    // Initialize the reverse map (Unicode -> PDFDocEncoding byte).
+    unicode_to_pdf_doc_encoding_map = std.HashMap(u21, u8, std.hash.IntegerContext(u21), .{}).init(allocator);
+    errdefer unicode_to_pdf_doc_encoding_map.deinit();
 
-    // Initialize encoding_map (unicode_to_pdf_doc_encoding_map)
-    // This requires an allocator for the HashMap.
-    unicode_to_pdf_doc_encoding_map = std.HashMap(u21, u8, std.hash.IntegerContext(u21), std.hash_map.default_max_load_percentage).init(std.heap.page_allocator);
-    // Populate the reverse map
     for (pdf_doc_encoding_to_unicode_map, 0..) |unicode_char, byte_val_u64| {
-        const byte_val: u8 = @intCast(byte_val_u64);
-        // Handle collisions: PDFDocEncoding is not a perfect 1:1 back.
-        // We want the "standard" or lowest byte value if multiple map to same Unicode.
-        // For PDFDocEncoding, it's mostly unique for what it *does* define.
-        // The issue is more about Unicode chars not in PDFDocEncoding.
-        if (unicode_char != 0xFFFD) { // Don't map replacement char back if possible
-            if (!unicode_to_pdf_doc_encoding_map.contains(unicode_char)) { // Prefer first encountered
-                try unicode_to_pdf_doc_encoding_map.put(unicode_char, byte_val);
-            } else {
-                // Example: If 0x00 (byte) -> U+0000 (Unicode), and later some other_byte -> U+0000
-                // We'd prefer the first mapping.
-                // For PDFDoc this shouldn't be a major issue for the defined range.
-            }
+        // Prefer the first (and lowest) byte value if multiple map to the same Unicode codepoint.
+        if (unicode_char != 0xFFFD and !unicode_to_pdf_doc_encoding_map.contains(unicode_char)) {
+            try unicode_to_pdf_doc_encoding_map.put(unicode_char, @intCast(byte_val_u64));
         }
     }
-    // Add common ASCII control chars that PDF spec allows in strings (though often escaped)
-    // but are not explicitly in PDFDocEncoding table for special Unicode mapping.
-    // \n, \r, \t, \b, \f
-    // These will be handled by literal string escaping if needed.
-    // Their direct byte values are < 0x20.
-    // Python's PDFDocEncoding maps 0x09, 0x0A, 0x0D to themselves.
-    // The loop above already did this.
-
     pdf_doc_encoding_initialized = true;
 }
 
+/// Frees the global resources used for PDFDocEncoding.
+/// Call this on application shutdown if encoding/decoding was used to prevent memory leaks.
 pub fn deinitPdfDocEncoding() void {
     if (pdf_doc_encoding_initialized) {
         unicode_to_pdf_doc_encoding_map.deinit();
@@ -123,49 +112,38 @@ pub fn deinitPdfDocEncoding() void {
     }
 }
 
+/// Represents a PDF String object, holding the raw, encoded bytes as they would appear in a PDF file.
 pub const PdfString = struct {
-    /// The raw, encoded string as it would appear in a PDF file (e.g., "(Hello)", "<48656C6C6F>").
-    /// This slice is owned by the PdfString instance.
+    /// The owned slice containing the encoded string, e.g., `(Hello World)` or `<48656C6C6F>`.
     encoded_bytes: []const u8,
     allocator: Allocator,
 
-    // indirect: bool = false, // This might belong to PdfObject or a wrapper
-
-    // Factory methods for encoding
+    /// Creates a `PdfString` by encoding a slice of raw bytes.
+    /// - `allocator`: Allocator for the new `PdfString`'s memory.
+    /// - `raw_bytes`: The unencoded byte sequence to be wrapped in a PDF string.
+    /// - `bytes_encoding_hint`: Determines whether to use literal `()` or hex `<>` encoding.
+    ///   `.auto` will choose hex if more than half the characters would require escaping in a literal string.
     pub fn fromBytes(allocator: Allocator, raw_bytes: []const u8, bytes_encoding_hint: enum { auto, literal, hex }) !PdfString {
         var encoded_buffer = std.ArrayList(u8).init(allocator);
-        defer encoded_buffer.deinit();
+        errdefer encoded_buffer.deinit();
 
         const use_hex = switch (bytes_encoding_hint) {
             .hex => true,
             .literal => false,
             .auto => blk: {
-                // Heuristic: if literal encoding is much longer, use hex.
-                // Python's heuristic: len(splitlist) // 2 >= len(raw)
-                // splitlist is from splitting on '(', ')', '\'. Each escape adds 1 byte.
-                // A simple heuristic: count chars that need escaping. If > 50% of len, or if very few non-ASCII.
-                // For now, a simpler one: if raw_bytes contains many non-printable or chars needing escape.
-                // Or just use hex if significantly shorter or roughly same as literal after escapes.
-                // Raw hex is 2*N + 2. Literal is N + 2 + num_escapes.
-                // Use hex if 2*N < N + num_escapes => N < num_escapes.
-                // This means if more than N characters need escaping, hex is better. This is too aggressive.
-                // Python: `len(splitlist) // 2 >= len(raw)`. `len(splitlist)` is roughly `raw.len + 2 * num_parentheses_or_backslashes`.
-                // So, `(raw.len + 2*num_escapes_for_lit) / 2 >= raw.len`
-                // `raw.len/2 + num_escapes_for_lit >= raw.len`
-                // `num_escapes_for_lit >= raw.len / 2`. If half the chars need escaping, use hex.
+                // Heuristic from pdfrw: use hex if escaping makes the literal string significantly longer.
+                // The threshold is when at least half the characters need escaping (`\`, `(`, or `)`).
                 var escape_count: usize = 0;
                 for (raw_bytes) |b| {
-                    if (b == '(' or b == ')' or b == '\\') {
-                        escape_count += 1;
-                    }
+                    if (b == '(' or b == ')' or b == '\\') escape_count += 1;
                 }
-                break :blk escape_count * 2 >= raw_bytes.len; // If escapes make it double, use hex
+                break :blk escape_count * 2 >= raw_bytes.len;
             },
         };
 
         if (use_hex) {
             try encoded_buffer.append('<');
-            try std.fmt.bytesToHex(encoded_buffer.writer(), raw_bytes, .upper);
+            try std.fmt.format(encoded_buffer.writer(), "{X}", .{raw_bytes});
             try encoded_buffer.append('>');
         } else {
             try encoded_buffer.append('(');
@@ -175,225 +153,174 @@ pub const PdfString = struct {
                         try encoded_buffer.append('\\');
                         try encoded_buffer.append(b);
                     },
-                    // Note: Python code does not escape \n, \r, \t etc. here,
-                    // it escapes them during *literal string decoding's re-encoding logic*.
-                    // For from_bytes, it seems to only escape structural chars.
                     else => try encoded_buffer.append(b),
                 }
             }
             try encoded_buffer.append(')');
         }
 
-        return PdfString{
-            .encoded_bytes = try encoded_buffer.toOwnedSlice(),
-            .allocator = allocator,
-        };
+        return PdfString{ .encoded_bytes = try encoded_buffer.toOwnedSlice(), .allocator = allocator };
     }
 
+    /// Creates a `PdfString` by encoding a UTF-8 string.
+    /// - `text_encoding_hint`: Determines whether to use `PDFDocEncoding` or `UTF-16BE`.
+    ///   `.auto` will try `PDFDocEncoding` first and fall back to `UTF-16BE` if any character is unsupported.
+    /// - `bytes_encoding_hint`: See `fromBytes`. When `UTF-16BE` is chosen, this defaults to `hex`.
     pub fn fromUnicode(allocator: Allocator, unicode_source: []const u8, text_encoding_hint: enum { auto, pdfdocencoding, utf16be }, bytes_encoding_hint: enum { auto, literal, hex }) !PdfString {
-        if (!pdf_doc_encoding_initialized) {
-            try initPdfDocEncoding();
-        }
+        try initPdfDocEncoding(allocator);
 
         var raw_bytes_to_encode = std.ArrayList(u8).init(allocator);
         defer raw_bytes_to_encode.deinit();
 
-        var chose_utf16be = false;
-
-        switch (text_encoding_hint) {
-            .auto, .pdfdocencoding => {
-                if (unicode_source.len >= 2 and unicode_source[0] == 0xFE and unicode_source[1] == 0xFF) {
-                    if (text_encoding_hint == .pdfdocencoding) return PdfStringError.EncodingError;
-                    chose_utf16be = true;
-                } else {
-                    var can_use_pdfdoc = true;
-                    var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source };
-                    while (iter.nextCodepoint()) |codepoint| {
-                        if (unicode_to_pdf_doc_encoding_map.get(codepoint)) |byte_val| {
-                            try raw_bytes_to_encode.append(byte_val);
-                        } else {
-                            can_use_pdfdoc = false;
-                            break;
-                        }
-                    } else |_| {
-                        return PdfStringError.InvalidPdfStringFormat;
-                    }
-
-                    if (!can_use_pdfdoc) {
-                        if (text_encoding_hint == .pdfdocencoding) return PdfStringError.EncodingError;
-                        chose_utf16be = true;
-                        raw_bytes_to_encode.clearRetainingCapacity();
-                    }
-                }
-            },
-            .utf16be => chose_utf16be = true,
-        }
-
-        if (chose_utf16be) {
-            try raw_bytes_to_encode.appendSlice(BOM_UTF16_BE);
+        var use_utf16be = false;
+        if (text_encoding_hint == .utf16be) {
+            use_utf16be = true;
+        } else {
+            // Attempt to encode with PDFDocEncoding.
+            var can_use_pdfdoc = true;
             var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source };
-            while (iter.nextCodepoint()) |codepoint| {
-                if (codepoint > 0xFFFF) {
-                    const high_surrogate = 0xD800 + ((codepoint - 0x10000) >> 10);
-                    const low_surrogate = 0xDC00 + ((codepoint - 0x10000) & 0x3FF);
-                    try raw_bytes_to_encode.append(@intCast((high_surrogate >> 8) & 0xFF));
-                    try raw_bytes_to_encode.append(@intCast(high_surrogate & 0xFF));
-                    try raw_bytes_to_encode.append(@intCast((low_surrogate >> 8) & 0xFF));
-                    try raw_bytes_to_encode.append(@intCast(low_surrogate & 0xFF));
+            while (try iter.nextCodepoint()) |codepoint| {
+                if (unicode_to_pdf_doc_encoding_map.get(codepoint)) |byte_val| {
+                    try raw_bytes_to_encode.append(byte_val);
                 } else {
-                    try raw_bytes_to_encode.append(@intCast((codepoint >> 8) & 0xFF));
-                    try raw_bytes_to_encode.append(@intCast(codepoint & 0xFF));
+                    can_use_pdfdoc = false;
+                    break;
                 }
-            } else |_| {
-                return PdfStringError.InvalidPdfStringFormat;
+            }
+            if (!can_use_pdfdoc) {
+                if (text_encoding_hint == .pdfdocencoding) return error.EncodingError;
+                use_utf16be = true;
             }
         }
 
-        const final_bytes_encoding = if (chose_utf16be and bytes_encoding_hint == .auto) .hex else bytes_encoding_hint;
+        if (use_utf16be) {
+            raw_bytes_to_encode.clearRetainingCapacity();
+            try raw_bytes_to_encode.appendSlice(BOM_UTF16_BE);
 
+            var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source };
+            while (try iter.nextCodepoint()) |codepoint| {
+                const utf16_be_bytes = std.unicode.utf16EncodeBe(codepoint) catch return error.EncodingError;
+                try raw_bytes_to_encode.appendSlice(&utf16_be_bytes);
+            }
+        }
+
+        const final_bytes_encoding = if (use_utf16be and bytes_encoding_hint == .auto) .hex else bytes_encoding_hint;
         return PdfString.fromBytes(allocator, raw_bytes_to_encode.items, final_bytes_encoding);
     }
 
+    /// Frees the memory owned by the `PdfString`.
     pub fn deinit(self: *const PdfString) void {
         self.allocator.free(self.encoded_bytes);
     }
 
-    fn decodeLiteral(self: PdfString, writer: anytype) !void {
-        if (self.encoded_bytes.len < 2 or self.encoded_bytes[0] != '(' or self.encoded_bytes[self.encoded_bytes.len - 1] != ')') {
-            return PdfStringError.InvalidPdfStringFormat;
-        }
-        const content = self.encoded_bytes[1 .. self.encoded_bytes.len - 1];
-        var i: usize = 0;
-        while (i < content.len) {
-            if (content[i] == '\\') {
-                i += 1;
-                if (i >= content.len) return PdfStringError.InvalidPdfStringFormat;
-                switch (content[i]) {
-                    'n' => try writer.writeByte('\n'),
-                    'r' => try writer.writeByte('\r'),
-                    't' => try writer.writeByte('\t'),
-                    'b' => try writer.writeByte('\x08'),
-                    'f' => try writer.writeByte('\x0c'),
-                    '(' => try writer.writeByte('('),
-                    ')' => try writer.writeByte(')'),
-                    '\\' => try writer.writeByte('\\'),
-                    '\n' => {},
-                    '\r' => {
-                        if (i + 1 < content.len and content[i + 1] == '\n') {
-                            i += 1;
-                        }
-                    },
-                    '0'...'7' => {
-                        var octal_len: usize = 0;
-                        while (i + octal_len < content.len and octal_len < 3 and content[i + octal_len] >= '0' and content[i + octal_len] <= '7') {
-                            octal_len += 1;
-                        }
-                        if (octal_len == 0) return PdfStringError.InvalidOctalEscape;
-                        const octal_str = content[i .. i + octal_len];
-                        const byte_val = std.fmt.parseUnsigned(u8, octal_str, 8) catch return PdfStringError.InvalidOctalEscape;
-                        try writer.writeByte(byte_val);
-                        i += octal_len - 1;
-                    },
-                    else => try writer.writeByte(content[i]),
-                }
-            } else {
-                try writer.writeByte(content[i]);
-            }
-            i += 1;
-        }
-    }
-
-    fn decodeHex(self: PdfString, writer: anytype) !void {
-        if (self.encoded_bytes.len < 2 or self.encoded_bytes[0] != '<' or self.encoded_bytes[self.encoded_bytes.len - 1] != '>') {
-            return PdfStringError.InvalidPdfStringFormat;
-        }
-        var content_cleaned = std.ArrayList(u8).init(self.allocator);
-        defer content_cleaned.deinit();
-
-        for (self.encoded_bytes[1 .. self.encoded_bytes.len - 1]) |char| {
-            if (!std.ascii.isWhitespace(char)) {
-                try content_cleaned.append(char);
-            }
-        }
-
-        const hex_content = content_cleaned.items;
-        if (hex_content.len % 2 != 0) {
-            try content_cleaned.append('0');
-        }
-        try std.fmt.hexToBytes(writer, content_cleaned.items);
-    }
-
+    /// Decodes the PDF string into its raw byte sequence.
+    /// The caller is responsible for freeing the returned slice.
     pub fn toBytes(self: PdfString, allocator: Allocator) ![]const u8 {
         var buffer = std.ArrayList(u8).init(allocator);
 
         if (self.encoded_bytes.len > 0) {
-            if (self.encoded_bytes[0] == '(') {
-                try self.decodeLiteral(buffer.writer());
-            } else if (self.encoded_bytes[0] == '<') {
-                try self.decodeHex(buffer.writer());
-            } else {
-                return PdfStringError.InvalidPdfStringFormat;
+            switch (self.encoded_bytes[0]) {
+                '(' => try self.decodeLiteral(buffer.writer()),
+                '<' => try self.decodeHex(buffer.writer()),
+                else => return error.InvalidPdfStringFormat,
             }
         }
         return buffer.toOwnedSlice();
     }
 
+    /// Decodes the PDF string into a UTF-8 encoded string.
+    /// It first decodes to raw bytes, then interprets them as UTF-16BE (if a BOM is present)
+    /// or PDFDocEncoding otherwise. The caller must free the returned slice.
     pub fn toUnicode(self: PdfString, allocator: Allocator) ![]const u8 {
-        if (!pdf_doc_encoding_initialized) {
-            const gpa = std.heap.page_allocator;
-            try initPdfDocEncoding(gpa);
-        }
+        try initPdfDocEncoding(allocator);
 
         const raw_bytes = try self.toBytes(allocator);
         defer allocator.free(raw_bytes);
 
         var unicode_buffer = std.ArrayList(u8).init(allocator);
+        errdefer unicode_buffer.deinit();
 
-        if (raw_bytes.len >= 2 and std.mem.eql(u8, raw_bytes[0..2], BOM_UTF16_BE)) {
-            const utf16_payload = raw_bytes[2..];
-            if (utf16_payload.len % 2 != 0) return PdfStringError.InvalidPdfStringFormat;
-
-            var i: usize = 0;
-            while (i < utf16_payload.len) : (i += 2) {
-                const c1 = utf16_payload[i];
-                const c2 = utf16_payload[i + 1];
-                var codepoint: u21 = (@as(u21, c1) << 8) | @as(u21, c2);
-
-                // Handle surrogate pairs
-                if (codepoint >= 0xD800 and codepoint <= 0xDBFF) {
-                    if (i + 3 >= utf16_payload.len) return PdfStringError.InvalidPdfStringFormat;
-                    const c3 = utf16_payload[i + 2];
-                    const c4 = utf16_payload[i + 3];
-                    const low_surrogate: u21 = (@as(u21, c3) << 8) | @as(u21, c4);
-                    if (low_surrogate < 0xDC00 or low_surrogate > 0xDFFF) return PdfStringError.InvalidPdfStringFormat; // Invalid low surrogate
-
-                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low_surrogate - 0xDC00);
-                    i += 2; // Consumed an extra pair
-                } else if (codepoint >= 0xDC00 and codepoint <= 0xDFFF) { // Low surrogate without high
-                    return PdfStringError.InvalidPdfStringFormat;
-                }
-
-                var temp_buf: [4]u8 = undefined;
-                const utf8_len = std.unicode.utf8Encode(codepoint, &temp_buf) catch return PdfStringError.EncodingError;
-                try unicode_buffer.appendSlice(temp_buf[0..utf8_len]);
-            }
+        if (std.mem.startsWith(u8, raw_bytes, BOM_UTF16_BE)) {
+            // Decode as UTF-16BE
+            const utf16_payload = raw_bytes[BOM_UTF16_BE.len..];
+            if (utf16_payload.len % 2 != 0) return error.InvalidPdfStringFormat;
+            try std.unicode.utf16LeToUtf8(unicode_buffer.writer(), std.unicode.utf16DecodeBe(utf16_payload));
         } else {
+            // Decode as PDFDocEncoding
             for (raw_bytes) |byte_val| {
                 const codepoint = pdf_doc_encoding_to_unicode_map[byte_val];
-                if (codepoint == 0xFFFD and byte_val != 0xAD) {}
                 var temp_buf: [4]u8 = undefined;
-                const utf8_len = std.unicode.utf8Encode(codepoint, &temp_buf) catch return PdfStringError.EncodingError;
+                const utf8_len = try std.unicode.utf8Encode(codepoint, &temp_buf);
                 try unicode_buffer.appendSlice(temp_buf[0..utf8_len]);
             }
         }
         return unicode_buffer.toOwnedSlice();
     }
 
+    /// Creates a deep copy of the `PdfString` using the provided allocator.
     pub fn clone(self: PdfString, new_allocator: Allocator) !PdfString {
-        const new_encoded_bytes = try new_allocator.dupe(u8, self.encoded_bytes);
         return PdfString{
-            .encoded_bytes = new_encoded_bytes,
+            .encoded_bytes = try new_allocator.dupe(u8, self.encoded_bytes),
             .allocator = new_allocator,
         };
+    }
+
+    // --- Private Helper Methods ---
+
+    fn decodeLiteral(self: PdfString, writer: anytype) !void {
+        if (self.encoded_bytes.len < 2 or self.encoded_bytes[0] != '(' or self.encoded_bytes[self.encoded_bytes.len - 1] != ')') {
+            return error.InvalidPdfStringFormat;
+        }
+        const content = self.encoded_bytes[1 .. self.encoded_bytes.len - 1];
+        var i: usize = 0;
+        while (i < content.len) : (i += 1) {
+            if (content[i] == '\\') {
+                i += 1;
+                if (i >= content.len) return error.InvalidPdfStringFormat;
+                switch (content[i]) {
+                    'n' => try writer.writeByte('\n'),
+                    'r' => try writer.writeByte('\r'),
+                    't' => try writer.writeByte('\t'),
+                    'b' => try writer.writeByte(0x08),
+                    'f' => try writer.writeByte(0x0C),
+                    '(', ')', '\\' => try writer.writeByte(content[i]),
+                    '\n' => {}, // Ignore escaped newline
+                    '\r' => { // Ignore escaped CRLF or CR
+                        if (i + 1 < content.len and content[i + 1] == '\n') i += 1;
+                    },
+                    '0'...'7' => { // Octal escape
+                        var octal_end = i;
+                        while (octal_end < content.len and octal_end < i + 3 and std.ascii.isOctal(content[octal_end])) {
+                            octal_end += 1;
+                        }
+                        const byte_val = try std.fmt.parseUnsigned(u8, content[i..octal_end], 8);
+                        try writer.writeByte(byte_val);
+                        i = octal_end - 1; // Correct for outer loop's increment
+                    },
+                    else => try writer.writeByte(content[i]), // Per spec, unknown escapes are just the character itself
+                }
+            } else {
+                try writer.writeByte(content[i]);
+            }
+        }
+    }
+
+    fn decodeHex(self: PdfString, writer: anytype) !void {
+        if (self.encoded_bytes.len < 2 or self.encoded_bytes[0] != '<' or self.encoded_bytes[self.encoded_bytes.len - 1] != '>') {
+            return error.InvalidPdfStringFormat;
+        }
+        var hex_content = std.ArrayList(u8).init(self.allocator);
+        defer hex_content.deinit();
+
+        for (self.encoded_bytes[1 .. self.encoded_bytes.len - 1]) |char| {
+            if (!std.ascii.isWhitespace(char)) {
+                try hex_content.append(char);
+            }
+        }
+        // Per spec, a final odd hex digit is treated as if it were followed by a '0'.
+        if (hex_content.items.len % 2 != 0) {
+            try hex_content.append('0');
+        }
+        try std.fmt.hexToBytes(writer, hex_content.items);
     }
 };

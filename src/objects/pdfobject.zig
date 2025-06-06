@@ -25,12 +25,12 @@ pub const PdfObject = union(enum) {
     Dict: PdfDict,
     IndirectRef: *PdfIndirect,
 
-    pub fn deinit(self: PdfObject, allocator: Allocator) void {
-        switch (self) {
-            .String => |s| s.deinit(),
-            .Name => |n| n.deinit(allocator),
+    pub fn deinit(self: *PdfObject, allocator: Allocator) void {
+        switch (self.*) {
+            .String => |*s| s.deinit(),
+            .Name => |*n| n.deinit(allocator),
             .Array => |a_ptr| a_ptr.deinit(),
-            .Dict => |d_val| {
+            .Dict => |*d_val| {
                 var mut_d_val = d_val;
                 mut_d_val.deinit();
             },
@@ -68,7 +68,7 @@ pub const PdfObject = union(enum) {
         return PdfObject{ .Boolean = val };
     }
 
-    pub fn initInteger(val: u64) PdfObject {
+    pub fn initInteger(val: i64) PdfObject {
         return PdfObject{ .Integer = val };
     }
 
@@ -77,7 +77,7 @@ pub const PdfObject = union(enum) {
     }
 
     pub fn initString(val: []const u8, allocator: Allocator) !PdfObject {
-        return PdfObject{ .String = try PdfString.init_From_literal(allocator, val) };
+        return PdfObject{ .String = try PdfString.fromBytes(allocator, val, .literal) };
     }
 
     pub fn initName(val: []const u8, allocator: Allocator) !PdfObject {
@@ -89,14 +89,14 @@ pub const PdfObject = union(enum) {
     }
 
     pub fn initDict(allocator: Allocator) !PdfObject {
-        return PdfObject{ .Dict = try PdfDict.init(allocator) };
+        return PdfObject{ .Dict = PdfDict.init(allocator) };
     }
 
     pub fn initIndirectRef(ref: *PdfIndirect) PdfObject {
         return PdfObject{ .IndirectRef = ref };
     }
 
-    pub fn eql(self: PdfObject, other: PdfObject) bool {
+    pub fn eql(self: PdfObject, other: PdfObject, allocator: Allocator) !bool {
         if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
 
         return switch (self) {
@@ -104,7 +104,7 @@ pub const PdfObject = union(enum) {
             .Boolean => |b1| b1 == other.Boolean,
             .Integer => |int1| int1 == other.Integer,
             .Real => |r1| r1 == other.Real,
-            .String => |s1| s1.eql(other.String),
+            .String => |s1| try s1.toUnicode(allocator) == try other.String.toUnicode(allocator),
             .Name => |n1| n1.eql(other.Name),
             .Array => |a1_ptr| if (other.Array) |a2_ptr| a1_ptr.eql(a2_ptr) else false,
             .Dict => |d1_val| d1_val.eql(other.Dict),

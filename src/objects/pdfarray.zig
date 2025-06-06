@@ -41,7 +41,7 @@ pub const PdfArray = struct {
     pub fn deinit(self: *PdfArray) void {
         for (self.items.items) |*item_in_array_ptr| {
             switch (item_in_array_ptr.*) {
-                .resolved => |resolved_object_value| {
+                .resolved => |*resolved_object_value| {
                     resolved_object_value.deinit(self.allocator);
                 },
                 .unresolved => |indirect_ptr| {
