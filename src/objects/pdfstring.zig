@@ -16,7 +16,7 @@ var pdf_doc_encoding_to_unicode_map: [256]u21 = undefined;
 var unicode_to_pdf_doc_encoding_map: std.HashMap(u21, u8, std.hash.IntegerContext(u21), std.hash_map.default_max_load_percentage) = undefined;
 var pdf_doc_encoding_initialized: bool = false;
 
-fn initPdfDocEncoding(allocator: Allocator) !void {
+fn initPdfDocEncoding() !void {
     if (pdf_doc_encoding_initialized) return;
 
     for (0..256) |i| {
@@ -87,7 +87,7 @@ fn initPdfDocEncoding(allocator: Allocator) !void {
 
     // Initialize encoding_map (unicode_to_pdf_doc_encoding_map)
     // This requires an allocator for the HashMap.
-    unicode_to_pdf_doc_encoding_map = std.HashMap(u21, u8, std.hash.IntegerContext(u21), std.hash_map.default_max_load_percentage).init(allocator);
+    unicode_to_pdf_doc_encoding_map = std.HashMap(u21, u8, std.hash.IntegerContext(u21), std.hash_map.default_max_load_percentage).init(std.heap.page_allocator);
     // Populate the reverse map
     for (pdf_doc_encoding_to_unicode_map, 0..) |unicode_char, byte_val_u64| {
         const byte_val: u8 = @intCast(byte_val_u64);
@@ -192,7 +192,7 @@ pub const PdfString = struct {
 
     pub fn fromUnicode(allocator: Allocator, unicode_source: []const u8, text_encoding_hint: enum { auto, pdfdocencoding, utf16be }, bytes_encoding_hint: enum { auto, literal, hex }) !PdfString {
         if (!pdf_doc_encoding_initialized) {
-            try initPdfDocEncoding(allocator); // Use the passed allocator
+            try initPdfDocEncoding();
         }
 
         var raw_bytes_to_encode = std.ArrayList(u8).init(allocator);

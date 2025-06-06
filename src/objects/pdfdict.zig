@@ -12,7 +12,9 @@ const Allocator = std.mem.Allocator;
 
 const PdfDictPointerMapContext = struct {
     pub fn hash(_: PdfDictPointerMapContext, key: *PdfDict) u32 {
-        return std.hash_map.hashString(@intFromPtr(key));
+        const value_ptr = @intFromPtr(key);
+        const bytes_ptr = std.mem.asBytes(&value_ptr);
+        return @truncate(std.hash_map.hashString(bytes_ptr));
     }
     pub fn eql(_: PdfDictPointerMapContext, a: *PdfDict, b: *PdfDict) bool {
         return a == b;
@@ -20,13 +22,13 @@ const PdfDictPointerMapContext = struct {
 };
 
 const PdfDictMapContextMap = struct {
-    pub fn hash(_: PdfDictMapContextMap, key: *PdfName) u32 {
+    pub fn hash(_: PdfDictMapContextMap, key: *const PdfName) u32 {
         return key.hash();
     }
-    pub fn eql(_: PdfDictMapContextMap, a: *PdfName, b: *PdfName) bool {
-        return a.eql(b);
+    pub fn eql(_: PdfDictMapContextMap, a: *const PdfName, b: *const PdfName) bool {
+        return a.eql(b.*);
     }
-    pub fn deinitKey(_: PdfDictMapContextMap, key: *PdfName, allocator: Allocator) void {
+    pub fn deinitKey(_: PdfDictMapContextMap, key: *const PdfName, allocator: Allocator) void {
         key.deinit(allocator);
         allocator.destroy(key);
     }
@@ -54,7 +56,7 @@ const PdfDictMapContextMap = struct {
 
 pub const PdfDict = struct {
     allocator: Allocator,
-    map: std.HashMap(*PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage),
+    map: std.HashMap(*const PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage),
     indirect: bool = false,
     stream: ?[]const u8 = null,
     parent: ?*PdfDict = null,
@@ -63,7 +65,7 @@ pub const PdfDict = struct {
     pub fn init(allocator: Allocator) PdfDict {
         return .{
             .allocator = allocator,
-            .map = std.HashMap(PdfName, PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage).init(allocator),
+            .map = std.HashMap(*const PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage).init(allocator),
             .private_attrs = std.StringHashMap(*PdfObject).init(allocator),
         };
     }
@@ -85,44 +87,68 @@ pub const PdfDict = struct {
     }
 
     pub fn put(self: *PdfDict, key: PdfName, value: ?PdfObject) !void {
-        const new_key_ptr = try self.allocator.create(PdfName);
-        errdefer self.allocator.destroy(new_key_ptr);
-        new_key_ptr.* = try key.clone(self.allocator);
-        errdefer new_key_ptr.deinit(self.allocator);
-
         if (value) |v| {
-            const new_value_ptr = try self.allocator.create(PdfObject);
-            errdefer self.allocator.destroy(new_value_ptr);
-            new_value_ptr.* = try v.clone(self.allocator);
-            errdefer new_value_ptr.deinit(self.allocator);
+            const new_key_ptr = try key.clone_to_ptr(self.allocator);
+            errdefer {
+                new_key_ptr.*.deinit(self.allocator);
+                self.allocator.destroy(new_key_ptr);
+            }
 
-            if (try self.map.fetchPut(new_key_ptr.*, new_value_ptr.*)) |old_entry| {
-                PdfDictMapContextMap.deinitKey(PdfDictMapContextMap{}, old_entry.key, self.allocator);
-                PdfDictMapContextMap.deinitValue(PdfDictMapContextMap{}, old_entry.value, self.allocator);
+            const new_value_ptr = try v.clone_to_ptr(self.allocator);
+            errdefer {
+                new_value_ptr.*.deinit(self.allocator);
+                self.allocator.destroy(new_value_ptr);
+            }
+
+            if (try self.map.fetchPut(new_key_ptr, new_value_ptr)) |old_entry| {
+                PdfDictMapContextMap.deinitKey(.{}, old_entry.key, self.allocator);
+                PdfDictMapContextMap.deinitValue(.{}, old_entry.value, self.allocator);
             }
         } else {
-            if (self.map.fetchRemove(new_key_ptr)) |removed_entry| {
-                PdfDictMapContextMap.deinitKey({}, removed_entry.key_ptr, self.allocator);
-                PdfDictMapContextMap.deinitValue({}, removed_entry.value_ptr, self.allocator);
+            if (self.map.fetchRemove(&key)) |removed_entry| {
+                PdfDictMapContextMap.deinitKey(.{}, removed_entry.key, self.allocator);
+                PdfDictMapContextMap.deinitValue(.{}, removed_entry.value, self.allocator);
             }
-
-            new_key_ptr.*.deinit(self.allocator);
-            self.allocator.destroy(new_key_ptr);
         }
     }
 
-    pub fn get(self: *PdfDict, key: PdfName) !?PdfObject {
-        if (self.map.getEntry(&key)) |map_entry| {
-            const current_value_ptr = map_entry.value_ptr;
+    pub fn get(self: *PdfDict, key: *const PdfName) !?PdfObject {
+        if (self.map.getEntry(key)) |map_entry| {
+            const current_value_ptr = map_entry.value_ptr.*;
 
-            if(std.meta.activeTag(current_value_ptr.*) == .IndirectRef) {
+            if (std.meta.activeTag(current_value_ptr.*) == .IndirectRef) {
                 const indirect_ref_instance_ptr = current_value_ptr.*.IndirectRef;
                 const resolved_obj_actual_ptr = try indirect_ref_instance_ptr.*.real_value(self.allocator);
 
-                if(resolved_obj_actual_ptr) |resolved_obj|{
-                    const owned_resolved_obj = try resolved_obj_actual_ptr.
+                if (resolved_obj_actual_ptr) |resolved_obj| {
+                    const owned_resolved_obj = try resolved_obj.*.clone(self.allocator);
+                    errdefer owned_resolved_obj.deinit(self.allocator);
+
+                    const removed_entry = self.map.fetchRemove(map_entry.key_ptr.*).?;
+
+                    PdfDictMapContextMap.deinitKey(.{}, removed_entry.key, self.allocator);
+                    PdfDictMapContextMap.deinitValue(.{}, removed_entry.value, self.allocator);
+
+                    const new_key_for_reinsert_ptr = try (map_entry.key_ptr.*).clone_to_ptr(self.allocator);
+                    const new_value_for_reinsert_ptr = try owned_resolved_obj.clone_to_ptr(self.allocator);
+
+                    errdefer {
+                        new_key_for_reinsert_ptr.*.deinit(self.allocator);
+                        self.allocator.destroy(new_key_for_reinsert_ptr);
+                        new_value_for_reinsert_ptr.*.deinit(self.allocator);
+                        self.allocator.destroy(new_value_for_reinsert_ptr);
+                    }
+
+                    try self.map.put(new_key_for_reinsert_ptr, new_value_for_reinsert_ptr);
+                    return owned_resolved_obj;
+                } else {
+                    const removed_obj = self.map.fetchRemove(map_entry.key_ptr.*).?;
+                    PdfDictMapContextMap.deinitKey(.{}, removed_obj.key, self.allocator);
+                    PdfDictMapContextMap.deinitValue(.{}, removed_obj.value, self.allocator);
+                    return null;
                 }
             }
+            return try current_value_ptr.*.clone(self.allocator);
         }
         return null;
     }
@@ -144,12 +170,15 @@ pub const PdfDict = struct {
 
     pub const Entry = struct { key: PdfName, value: PdfObject };
     pub const Iterator = struct {
-        inner: std.HashMap(*PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage).Iterator,
+        inner: std.HashMap(*const PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage).Iterator,
         dict: *PdfDict,
         pub fn next(self: *Iterator) !?Entry {
             while (self.inner.next()) |entry| {
-                if (try self.dict.get(entry.key_ptr.*)) |resolved_value| {
-                    return .{ .key = entry.key_ptr.*, .value = resolved_value };
+                if (try self.dict.get((entry.key_ptr.*))) |resolved_value| {
+                    return .{
+                        .key = try entry.key_ptr.*.*.clone(self.dict.allocator),
+                        .value = resolved_value,
+                    };
                 }
             }
             return null;
@@ -169,7 +198,7 @@ pub const PdfDict = struct {
             if (visited.contains(dict)) return error.CircularParentReference;
             try visited.put(dict, {});
 
-            if (try dict.get(key)) |val| {
+            if (try dict.get(&key)) |val| {
                 return val;
             }
             current = dict.parent;
@@ -208,7 +237,7 @@ pub const PdfDict = struct {
             new_priv_value_ptr.* = try entry.value_ptr.*.clone(self.allocator);
             errdefer new_priv_value_ptr.*.deinit(self.allocator);
 
-            try new_dict.private_attrs.put(try self.allocator.dupe(u8, entry.key_ptr), new_priv_value_ptr);
+            try new_dict.private_attrs.put(try self.allocator.dupe(u8, entry.key_ptr.*), new_priv_value_ptr);
         }
         return new_dict;
     }

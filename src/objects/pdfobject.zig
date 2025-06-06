@@ -57,7 +57,7 @@ pub const PdfObject = union(enum) {
 
     pub fn clone_to_ptr(self: PdfObject, allocator: Allocator) !*PdfObject {
         const ptr = try allocator.create(PdfObject);
-        ptr.* = self.clone(allocator);
+        ptr.* = try self.clone(allocator);
         return ptr;
     }
 

@@ -196,7 +196,7 @@ pub const PdfName = struct {
 
     pub fn clone_to_ptr(self: PdfName, allocator: Allocator) !*PdfName {
         const ptr = try allocator.create(PdfName);
-        ptr.* = self.clone(allocator);
+        ptr.* = try self.clone(allocator);
         return ptr;
     }
 };
