@@ -34,7 +34,7 @@ const BOM_UTF16_BE = [_]u8{ 0xFE, 0xFF };
 // These are lazily initialized on first use to avoid startup cost.
 
 var pdf_doc_encoding_to_unicode_map: [256]u21 = undefined;
-var unicode_to_pdf_doc_encoding_map: std.HashMap(u21, u8, std.hash.IntegerContext(u21), .{}) = undefined;
+var unicode_to_pdf_doc_encoding_map: std.AutoHashMap(u21, u8) = undefined;
 var pdf_doc_encoding_initialized: bool = false;
 
 /// Initializes the global mapping tables for PDFDocEncoding.
@@ -91,7 +91,7 @@ fn initPdfDocEncoding(allocator: Allocator) !void {
     pdf_doc_encoding_to_unicode_map[0xAD] = 0xFFFD; // SOFT HYPHEN is unassigned, map to REPLACEMENT CHARACTER.
 
     // Initialize the reverse map (Unicode -> PDFDocEncoding byte).
-    unicode_to_pdf_doc_encoding_map = std.HashMap(u21, u8, std.hash.IntegerContext(u21), .{}).init(allocator);
+    unicode_to_pdf_doc_encoding_map = std.AutoHashMap(u21, u8).init(allocator);
     errdefer unicode_to_pdf_doc_encoding_map.deinit();
 
     for (pdf_doc_encoding_to_unicode_map, 0..) |unicode_char, byte_val_u64| {
@@ -289,13 +289,21 @@ pub const PdfString = struct {
                         if (i + 1 < content.len and content[i + 1] == '\n') i += 1;
                     },
                     '0'...'7' => { // Octal escape
-                        var octal_end = i;
-                        while (octal_end < content.len and octal_end < i + 3 and std.ascii.isOctal(content[octal_end])) {
-                            octal_end += 1;
+                        var octal_len: usize = 0;
+                        while (i + octal_len < content.len and octal_len < 3) : (octal_len += 1) {
+                            const char = content[i + octal_len];
+                            if (char < '0' or char > '7') {
+                                break;
+                            }
                         }
-                        const byte_val = try std.fmt.parseUnsigned(u8, content[i..octal_end], 8);
+
+                        if (octal_len == 0)
+                            return PdfStringError.InvalidOctalEscape;
+
+                        const octal_ptr = content[i .. i + octal_len];
+                        const byte_val = std.fmt.parseUnsigned(u8, octal_ptr, 8) catch return error.InvalidOctalEscape;
                         try writer.writeByte(byte_val);
-                        i = octal_end - 1; // Correct for outer loop's increment
+                        i += octal_len - 1;
                     },
                     else => try writer.writeByte(content[i]), // Per spec, unknown escapes are just the character itself
                 }
