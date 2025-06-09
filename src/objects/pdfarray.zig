@@ -229,7 +229,7 @@ pub const PdfArray = struct {
     /// Compares two PdfArray objects for equality.
     /// This method resolves all items in both arrays before comparison.
     /// Returns true if both arrays contain the same resolved PdfObjects in the same order.
-    pub fn eql(self: *PdfArray, other: *PdfArray) error{OutOfMemory}!bool {
+    pub fn eql(self: *PdfArray, other: *PdfArray) error{ OutOfMemory, NoSpaceLeft, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge, InvalidCharacter, InvalidPdfStringFormat, InvalidHexCharacter, InvalidOctalEscape, EncodingError, InvalidLength, InvalidReference }!bool {
         try self.*.ensureAllItemsResolved();
         try other.*.ensureAllItemsResolved();
 

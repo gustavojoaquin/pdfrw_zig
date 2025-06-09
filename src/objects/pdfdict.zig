@@ -294,7 +294,7 @@ pub const PdfDict = struct {
     /// Returns true if both dictionaries contain the same resolved PdfObjects
     /// for the same PdfName keys, and if their stream data is identical.
     /// Inheritable values (`parent`) and internal `private_attrs` are NOT considered for equality.
-    pub fn eql(self: *PdfDict, other: *PdfDict) !bool {
+    pub fn eql(self: *PdfDict, other: *PdfDict) error{ OutOfMemory, NoSpaceLeft, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge, InvalidCharacter, InvalidPdfStringFormat, InvalidHexCharacter, InvalidOctalEscape, EncodingError, InvalidLength }!bool {
         if (self.stream) |s1| {
             if (other.stream) |s2| {
                 if (std.mem.eql(u8, s1, s2)) return false;

@@ -12,6 +12,15 @@ const PdfArray = pdfarray.PdfArray;
 const PdfDict = pdfdict.PdfDict;
 const Allocator = std.mem.Allocator;
 
+pub const PdfResolutionError = error{
+    OutOfMemory,
+    NoSpaceLeft,
+    InvalidReference,
+    ObjectNotFound,
+    InvalidPdfStructure,
+    ParseError,
+};
+
 /// A PdfObject can be any of the fundamental PDF data types.
 /// This is a direct, resolved value.
 pub const PdfObject = union(enum) {
