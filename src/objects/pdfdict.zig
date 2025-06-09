@@ -2,7 +2,7 @@ const std = @import("std");
 const pdfname = @import("pdfname.zig");
 const pdfobject = @import("pdfobject.zig");
 const pdfindirect = @import("pdfindirect.zig");
-const errors = @import("../errors.zig");
+const errors = @import("errors.zig");
 
 const PdfName = pdfname.PdfName;
 const PdfObject = pdfobject.PdfObject;
@@ -81,7 +81,6 @@ pub const PdfDict = struct {
         var priv_attrs_iter = self.private_attrs.iterator();
         while (priv_attrs_iter.next()) |entry| {
             entry.value_ptr.*.deinit(self.allocator);
-            self.allocator.destroy(entry.value_ptr);
         }
         self.private_attrs.deinit();
     }
@@ -206,7 +205,7 @@ pub const PdfDict = struct {
         return null;
     }
 
-    pub fn copy(self: *const PdfDict) error{OutOfMemory}!*PdfDict {
+    pub fn copy(self: *const PdfDict) PdfError!*PdfDict {
         const new_dict_ptr = try self.allocator.create(PdfDict);
         new_dict_ptr.* = PdfDict.init(self.allocator);
         errdefer {
@@ -294,7 +293,7 @@ pub const PdfDict = struct {
     /// Returns true if both dictionaries contain the same resolved PdfObjects
     /// for the same PdfName keys, and if their stream data is identical.
     /// Inheritable values (`parent`) and internal `private_attrs` are NOT considered for equality.
-    pub fn eql(self: *PdfDict, other: *PdfDict) error{ OutOfMemory, NoSpaceLeft, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge, InvalidCharacter, InvalidPdfStringFormat, InvalidHexCharacter, InvalidOctalEscape, EncodingError, InvalidLength }!bool {
+    pub fn eql(self: *PdfDict, other: *PdfDict) PdfError!bool {
         if (self.stream) |s1| {
             if (other.stream) |s2| {
                 if (std.mem.eql(u8, s1, s2)) return false;

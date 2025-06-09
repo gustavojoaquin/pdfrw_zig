@@ -2,7 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const pdfobject = @import("pdfobject.zig");
 const pdfindirect = @import("pdfindirect.zig");
+const errors = @import("errors.zig");
 
+const PdfError = errors.PdfError;
 const PdfObject = pdfobject.PdfObject;
 const PdfIndirect = pdfindirect.PdfIndirect;
 
@@ -27,7 +29,7 @@ pub const PdfArray = struct {
     /// For simplicity, we'll keep it, but ensure ensureResolved is thorough.
     all_items_resolved_attempted: bool,
 
-    pub fn init(allocator: Allocator, initial_is_indirect: bool) !*PdfArray {
+    pub fn init(allocator: Allocator, initial_is_indirect: bool) PdfError!*PdfArray {
         const self = try allocator.create(PdfArray);
         self.* = .{
             .allocator = allocator,
@@ -50,13 +52,12 @@ pub const PdfArray = struct {
             }
         }
         self.items.deinit();
-        self.allocator.destroy(self);
     }
 
     /// Ensures all items in the array are resolved.
     /// If an indirect object cannot be resolved (loader returns null), it's replaced with PdfObject.Null.
     /// If the loader itself errors, this function will propagate that error.
-    fn ensureAllItemsResolved(self: *PdfArray) !void {
+    fn ensureAllItemsResolved(self: *PdfArray) PdfError!void {
         if (self.all_items_resolved_attempted) {
             var still_unresolved = false;
             for (self.items.items) |item_val| {
@@ -107,7 +108,9 @@ pub const PdfArray = struct {
     /// Appends an already resolved PdfObject.
     /// The `PdfArray` takes ownership of the provided `obj` (it's moved).
     pub fn appendObject(self: *PdfArray, obj: PdfObject) !void {
-        try self.items.append(.{ .resolved = obj });
+        var cloned_obj = try obj.clone(self.allocator);
+        errdefer cloned_obj.deinit(self.allocator);
+        try self.items.append(.{ .resolved = cloned_obj });
     }
 
     /// Extends the array with items from a slice.
@@ -130,7 +133,7 @@ pub const PdfArray = struct {
     /// Gets a pointer to the PdfObject at the given index.
     /// The returned pointer is to memory managed by the PdfArray. Do not deinit.
     /// Returns error if index is out of bounds.
-    pub fn get(self: *PdfArray, index: usize) !*PdfObject {
+    pub fn get(self: *PdfArray, index: usize) PdfError!*PdfObject {
         try self.ensureAllItemsResolved();
         if (index >= self.items.items.len) return error.IndexOutOfBounds;
         const item_ptr = &self.items.items[index];
@@ -206,7 +209,7 @@ pub const PdfArray = struct {
     }
 
     /// Clones the PdfArray. Resolved items are cloned. Unresolved items (PdfIndirect pointers) are copied.
-    pub fn clone(self: *const PdfArray, new_allocator: Allocator) error{OutOfMemory}!*PdfArray {
+    pub fn clone(self: *const PdfArray, new_allocator: Allocator) PdfError!*PdfArray {
         const new_array_ptr = try PdfArray.init(new_allocator, self.is_indirect_object);
         errdefer new_array_ptr.deinit();
 
@@ -229,7 +232,7 @@ pub const PdfArray = struct {
     /// Compares two PdfArray objects for equality.
     /// This method resolves all items in both arrays before comparison.
     /// Returns true if both arrays contain the same resolved PdfObjects in the same order.
-    pub fn eql(self: *PdfArray, other: *PdfArray) error{ OutOfMemory, NoSpaceLeft, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge, InvalidCharacter, InvalidPdfStringFormat, InvalidHexCharacter, InvalidOctalEscape, EncodingError, InvalidLength, InvalidReference }!bool {
+    pub fn eql(self: *PdfArray, other: *PdfArray) PdfError!bool {
         try self.*.ensureAllItemsResolved();
         try other.*.ensureAllItemsResolved();
 

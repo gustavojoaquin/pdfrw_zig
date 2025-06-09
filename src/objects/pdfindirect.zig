@@ -1,6 +1,8 @@
 const std = @import("std");
 const pdfobject = @import("pdfobject.zig");
+const errors = @import("errors.zig");
 
+const PdfError = errors.PdfError;
 const PdfObject = pdfobject.PdfObject;
 
 /// A struct to represent the (object number, generation number) tuple.
@@ -46,7 +48,7 @@ pub const PdfIndirect = struct {
     /// This function takes a pointer to the `PdfIndirect` instance itself
     /// (to access its `ref` field) and an allocator.
     /// It should return a pointer to the loaded object, or an error.
-    loader: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject,
+    loader: *const fn (*PdfIndirect, allocator: std.mem.Allocator) PdfError!?*PdfObject,
 
     /// Initializes a PdfIndirect object.
     ///
@@ -60,7 +62,7 @@ pub const PdfIndirect = struct {
     pub fn init(
         obj_num: u32,
         gen_num: u32,
-        loader_fn: *const fn (*PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject,
+        loader_fn: *const fn (*PdfIndirect, allocator: std.mem.Allocator) PdfError!?*PdfObject,
     ) PdfIndirect {
         return .{
             .ref = ObjectReference.init(obj_num, gen_num),
@@ -73,7 +75,7 @@ pub const PdfIndirect = struct {
     /// The returned pointer points to the `PdfObject` stored within this `PdfIndirect` instance.
     /// The caller should typically clone this object if it needs to own it or modify it,
     /// as the `PdfIndirect` instance might be shared or its cached value could change.
-    pub fn real_value(self: *PdfIndirect, allocator: std.mem.Allocator) anyerror!?*PdfObject { // Return type includes `?`
+    pub fn real_value(self: *PdfIndirect, allocator: std.mem.Allocator) PdfError!?*PdfObject { // Return type includes `?`
         if (self.value == null) {
             const loaded_obj_opt = try self.loader(self, allocator);
             if (loaded_obj_opt) |loaded_obj| {

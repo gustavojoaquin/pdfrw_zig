@@ -4,6 +4,20 @@ pub const PdfError = error{
     Parse,
     Output,
     NotImplemented,
+    OutOfMemory,
+    NoSpaceLeft,
+    Utf8CannotEncodeSurrogateHalf,
+    CodepointTooLarge,
+    InvalidCharacter,
+    InvalidPdfStringFormat,
+    InvalidHexCharacter,
+    InvalidOctalEscape,
+    EncodingError,
+    InvalidLength,
+    InvalidReference,
+    ObjectNotFound,
+    CorruptStream,
+    InvalidPdfFormat,
 };
 
 pub fn pdfErrorName(err: PdfError) []const u8 {

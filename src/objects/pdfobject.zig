@@ -4,6 +4,7 @@ const pdfarray = @import("pdfarray.zig");
 const pdfdict = @import("pdfdict.zig");
 const pdfindirect = @import("pdfindirect.zig");
 const pdfstring = @import("pdfstring.zig");
+const errors = @import("errors.zig");
 
 const PdfString = pdfstring.PdfString;
 const PdfIndirect = pdfindirect.PdfIndirect;
@@ -11,15 +12,7 @@ const PdfName = pdfname.PdfName;
 const PdfArray = pdfarray.PdfArray;
 const PdfDict = pdfdict.PdfDict;
 const Allocator = std.mem.Allocator;
-
-pub const PdfResolutionError = error{
-    OutOfMemory,
-    NoSpaceLeft,
-    InvalidReference,
-    ObjectNotFound,
-    InvalidPdfStructure,
-    ParseError,
-};
+const PdfError = errors.PdfError;
 
 /// A PdfObject can be any of the fundamental PDF data types.
 /// This is a direct, resolved value.
@@ -38,10 +31,13 @@ pub const PdfObject = union(enum) {
         switch (self.*) {
             .String => |*s| s.deinit(),
             .Name => |*n| n.deinit(allocator),
-            .Array => |a_ptr| a_ptr.deinit(),
-            .Dict => |d_val| {
-                var mut_d_val = d_val;
-                mut_d_val.deinit();
+            .Array => |a_ptr| {
+                a_ptr.deinit();
+                allocator.destroy(a_ptr);
+            },
+            .Dict => |d_ptr| {
+                d_ptr.deinit();
+                allocator.destroy(d_ptr);
             },
             .IndirectRef => |iptr| {
                 _ = iptr;
@@ -50,7 +46,7 @@ pub const PdfObject = union(enum) {
         }
     }
 
-    pub fn clone(self: PdfObject, allocator: Allocator) !PdfObject {
+    pub fn clone(self: PdfObject, allocator: Allocator) PdfError!PdfObject {
         return switch (self) {
             .Null => PdfObject.Null,
             .Boolean => |b| PdfObject{ .Boolean = b },
@@ -85,7 +81,7 @@ pub const PdfObject = union(enum) {
         return PdfObject{ .Real = val };
     }
 
-    pub fn initString(val: []const u8, allocator: Allocator) !PdfObject {
+    pub fn initString(val: []const u8, allocator: Allocator) PdfError!PdfObject {
         return PdfObject{ .String = try PdfString.fromBytes(allocator, val, .literal) };
     }
 
@@ -107,7 +103,7 @@ pub const PdfObject = union(enum) {
         return PdfObject{ .IndirectRef = ref };
     }
 
-    pub fn eql(self: PdfObject, other: PdfObject, allocator: Allocator) error{ OutOfMemory, NoSpaceLeft, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge, InvalidCharacter, InvalidPdfStringFormat, InvalidHexCharacter, InvalidOctalEscape, EncodingError, InvalidLength }!bool {
+    pub fn eql(self: PdfObject, other: PdfObject, allocator: Allocator) PdfError!bool {
         if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
 
         return switch (self) {
@@ -115,11 +111,23 @@ pub const PdfObject = union(enum) {
             .Boolean => |b1| b1 == other.Boolean,
             .Integer => |int1| int1 == other.Integer,
             .Real => |r1| r1 == other.Real,
-            .String => |s1| std.mem.eql(u8, try s1.toUnicode(allocator), try other.String.toUnicode(allocator)),
+            .String => |s1| {
+                const s1_unicode = try s1.toUnicode(allocator);
+                defer allocator.free(s1_unicode);
+
+                const other_unicode = try other.String.toUnicode(allocator);
+                defer allocator.free(other_unicode);
+
+                return std.mem.eql(u8, s1_unicode, other_unicode);
+            },
             .Name => |n1| n1.eql(other.Name),
             .Array => |a1_ptr| a1_ptr.eql(other.Array),
             .Dict => |d1_ptr| d1_ptr.eql(other.Dict),
             .IndirectRef => |ir1_ptr| ir1_ptr.eql(other.IndirectRef.*),
         };
+    }
+
+    pub fn getTag(self: PdfObject) std.meta.Tag(PdfObject) {
+        return @tagName(self);
     }
 };

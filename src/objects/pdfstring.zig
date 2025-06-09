@@ -112,6 +112,12 @@ pub fn deinitPdfDocEncoding() void {
     }
 }
 
+pub const BytesEncodingHint = enum {
+    auto,
+    literal,
+    hex,
+};
+
 /// Represents a PDF String object, holding the raw, encoded bytes as they would appear in a PDF file.
 pub const PdfString = struct {
     /// The owned slice containing the encoded string, e.g., `(Hello World)` or `<48656C6C6F>`.
@@ -123,7 +129,7 @@ pub const PdfString = struct {
     /// - `raw_bytes`: The unencoded byte sequence to be wrapped in a PDF string.
     /// - `bytes_encoding_hint`: Determines whether to use literal `()` or hex `<>` encoding.
     ///   `.auto` will choose hex if more than half the characters would require escaping in a literal string.
-    pub fn fromBytes(allocator: Allocator, raw_bytes: []const u8, bytes_encoding_hint: enum { auto, literal, hex }) !PdfString {
+    pub fn fromBytes(allocator: Allocator, raw_bytes: []const u8, bytes_encoding_hint: BytesEncodingHint) !PdfString {
         var encoded_buffer = std.ArrayList(u8).init(allocator);
         errdefer encoded_buffer.deinit();
 
@@ -166,45 +172,75 @@ pub const PdfString = struct {
     /// - `text_encoding_hint`: Determines whether to use `PDFDocEncoding` or `UTF-16BE`.
     ///   `.auto` will try `PDFDocEncoding` first and fall back to `UTF-16BE` if any character is unsupported.
     /// - `bytes_encoding_hint`: See `fromBytes`. When `UTF-16BE` is chosen, this defaults to `hex`.
-    pub fn fromUnicode(allocator: Allocator, unicode_source: []const u8, text_encoding_hint: enum { auto, pdfdocencoding, utf16be }, bytes_encoding_hint: enum { auto, literal, hex }) !PdfString {
+    pub fn fromUnicode(
+        allocator: Allocator,
+        unicode_source: []const u8,
+        text_encoding_hint: enum { auto, pdfdocencoding, utf16be },
+        bytes_encoding_hint: BytesEncodingHint,
+    ) !PdfString {
         try initPdfDocEncoding(allocator);
 
         var raw_bytes_to_encode = std.ArrayList(u8).init(allocator);
         defer raw_bytes_to_encode.deinit();
 
         var use_utf16be = false;
-        if (text_encoding_hint == .utf16be) {
-            use_utf16be = true;
-        } else {
-            // Attempt to encode with PDFDocEncoding.
-            var can_use_pdfdoc = true;
-            var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source };
-            while (try iter.nextCodepoint()) |codepoint| {
-                if (unicode_to_pdf_doc_encoding_map.get(codepoint)) |byte_val| {
-                    try raw_bytes_to_encode.append(byte_val);
-                } else {
-                    can_use_pdfdoc = false;
-                    break;
+
+        switch (text_encoding_hint) {
+            .utf16be => use_utf16be = true,
+            .pdfdocencoding => {},
+            .auto => {
+                var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source, .i = 0 };
+                while (iter.nextCodepoint()) |codepoint| {
+                    if (!unicode_to_pdf_doc_encoding_map.contains(codepoint)) {
+                        use_utf16be = true;
+                        break;
+                    }
                 }
-            }
-            if (!can_use_pdfdoc) {
-                if (text_encoding_hint == .pdfdocencoding) return error.EncodingError;
-                use_utf16be = true;
-            }
+            },
         }
 
         if (use_utf16be) {
-            raw_bytes_to_encode.clearRetainingCapacity();
-            try raw_bytes_to_encode.appendSlice(BOM_UTF16_BE);
+            try raw_bytes_to_encode.appendSlice(&BOM_UTF16_BE);
 
-            var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source };
-            while (try iter.nextCodepoint()) |codepoint| {
-                const utf16_be_bytes = std.unicode.utf16EncodeBe(codepoint) catch return error.EncodingError;
-                try raw_bytes_to_encode.appendSlice(&utf16_be_bytes);
+            var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source, .i = 0 };
+            while (iter.nextCodepoint()) |codepoint| {
+                var utf16_buf: [2]u16 = undefined;
+                const utf16_slice = blk: {
+                    if (codepoint <= 0xFFFF) {
+                        // BMP character.
+                        if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return error.EncodingError;
+                        utf16_buf[0] = @intCast(codepoint);
+                        break :blk utf16_buf[0..1];
+                    } else if (codepoint <= 0x10FFFF) {
+                        const cp = codepoint - 0x10000;
+                        utf16_buf[0] = @as(u16, @intCast(cp >> 10)) + 0xD800;
+                        utf16_buf[1] = @as(u16, @intCast(cp & 0x3FF)) + 0xDC00;
+                        break :blk utf16_buf[0..2];
+                    } else {
+                        return error.EncodingError;
+                    }
+                };
+
+                for (utf16_slice) |unit| {
+                    try raw_bytes_to_encode.writer().writeInt(u16, unit, .big);
+                }
+            }
+        } else {
+            var iter = std.unicode.Utf8Iterator{ .bytes = unicode_source, .i = 0 };
+            while (iter.nextCodepoint()) |codepoint| {
+                if (unicode_to_pdf_doc_encoding_map.get(codepoint)) |pdf_doc_byte| {
+                    try raw_bytes_to_encode.append(pdf_doc_byte);
+                } else {
+                    return error.EncodingError;
+                }
             }
         }
 
-        const final_bytes_encoding = if (use_utf16be and bytes_encoding_hint == .auto) .hex else bytes_encoding_hint;
+        const final_bytes_encoding = if (use_utf16be and bytes_encoding_hint == .auto)
+            .hex
+        else
+            bytes_encoding_hint;
+
         return PdfString.fromBytes(allocator, raw_bytes_to_encode.items, final_bytes_encoding);
     }
 
