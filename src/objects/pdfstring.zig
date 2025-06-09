@@ -240,11 +240,58 @@ pub const PdfString = struct {
         var unicode_buffer = std.ArrayList(u8).init(allocator);
         errdefer unicode_buffer.deinit();
 
-        if (std.mem.startsWith(u8, raw_bytes, BOM_UTF16_BE)) {
+        if (std.mem.startsWith(u8, raw_bytes, &BOM_UTF16_BE)) {
             // Decode as UTF-16BE
             const utf16_payload = raw_bytes[BOM_UTF16_BE.len..];
             if (utf16_payload.len % 2 != 0) return error.InvalidPdfStringFormat;
-            try std.unicode.utf16LeToUtf8(unicode_buffer.writer(), std.unicode.utf16DecodeBe(utf16_payload));
+
+            var i: usize = 0;
+            while (i < utf16_payload.len) : (i += 2) {
+                // Ensure there are at least 2 bytes for a u16 unit
+                if (i + 2 > utf16_payload.len) return error.InvalidPdfStringFormat;
+
+                // Manually read u16 in Big Endian
+                const byte0 = utf16_payload[i];
+                const byte1 = utf16_payload[i + 1];
+                const utf16_unit: u16 = (@as(u16, byte0) << 8) | byte1;
+
+                var codepoint: u21 = undefined;
+
+                // Check for high surrogate (U+D800 to U+DBFF)
+                if (utf16_unit >= 0xD800 and utf16_unit <= 0xDBFF) {
+                    // Expect a low surrogate next
+                    if (i + 4 > utf16_payload.len) return error.EncodingError; // Not enough bytes for low surrogate
+
+                    // Manually read next u16 in Big Endian
+                    const next_byte0 = utf16_payload[i + 2];
+                    const next_byte1 = utf16_payload[i + 3];
+                    const next_utf16_unit: u16 = (@as(u16, next_byte0) << 8) | next_byte1;
+
+                    // Check for low surrogate (U+DC00 to U+DFFF)
+                    if (next_utf16_unit >= 0xDC00 and next_utf16_unit <= 0xDFFF) {
+                        // Combine surrogate pair into a single codepoint
+                        const high_val = utf16_unit - 0xD800;
+                        const low_val = next_utf16_unit - 0xDC00;
+                        // Cast high_val to u21 to ensure multiplication is done with enough precision
+                        codepoint = (@as(u21, high_val) * 0x400) + low_val + 0x10000;
+                        i += 2; // Advance index by an additional 2 bytes as we consumed the low surrogate
+                    } else {
+                        // High surrogate not followed by a valid low surrogate
+                        return error.EncodingError;
+                    }
+                } else if (utf16_unit >= 0xDC00 and utf16_unit <= 0xDFFF) {
+                    // Orphaned low surrogate (invalid)
+                    return error.EncodingError;
+                } else {
+                    // Normal BMP character
+                    codepoint = utf16_unit;
+                }
+
+                // Encode the codepoint to UTF-8 and append to buffer
+                var temp_buf: [4]u8 = undefined;
+                const utf8_len = try std.unicode.utf8Encode(codepoint, &temp_buf);
+                try unicode_buffer.appendSlice(temp_buf[0..utf8_len]);
+            }
         } else {
             // Decode as PDFDocEncoding
             for (raw_bytes) |byte_val| {
@@ -329,6 +376,13 @@ pub const PdfString = struct {
         if (hex_content.items.len % 2 != 0) {
             try hex_content.append('0');
         }
-        try std.fmt.hexToBytes(writer, hex_content.items);
+
+        const decoded_len = hex_content.items.len / 2;
+        const temp_buffer = try self.allocator.alloc(u8, decoded_len);
+        defer self.allocator.free(temp_buffer);
+
+        _ = try std.fmt.hexToBytes(temp_buffer, hex_content.items);
+
+        try writer.writeAll(temp_buffer);
     }
 };

@@ -121,7 +121,7 @@ pub const PdfDict = struct {
                 const resolved_obj_actual_ptr = try indirect_ref_instance_ptr.*.real_value(self.allocator);
 
                 if (resolved_obj_actual_ptr) |resolved_obj| {
-                    const owned_resolved_obj = try resolved_obj.*.clone(self.allocator);
+                    var owned_resolved_obj = try resolved_obj.*.clone(self.allocator);
                     errdefer owned_resolved_obj.deinit(self.allocator);
 
                     const removed_entry = self.map.fetchRemove(map_entry.key_ptr.*).?;
@@ -206,40 +206,61 @@ pub const PdfDict = struct {
         return null;
     }
 
-    pub fn copy(self: *const PdfDict) error{OutOfMemory}!PdfDict {
-        var new_dict = PdfDict.init(self.allocator);
-        new_dict.indirect = self.indirect;
+    pub fn copy(self: *const PdfDict) error{OutOfMemory}!*PdfDict {
+        const new_dict_ptr = try self.allocator.create(PdfDict);
+        new_dict_ptr.* = PdfDict.init(self.allocator);
+        errdefer {
+            new_dict_ptr.deinit();
+            self.allocator.destroy(new_dict_ptr);
+        }
 
-        new_dict.stream = if (self.stream) |s| try self.allocator.dupe(u8, s) else null;
-        errdefer if (new_dict.stream) |s| self.allocator.free(s);
+        new_dict_ptr.indirect = self.indirect;
 
-        new_dict.parent = self.parent;
+        if (self.stream) |s| {
+            new_dict_ptr.stream = try self.allocator.dupe(u8, s);
+        } else {
+            new_dict_ptr.stream = null;
+        }
+
+        new_dict_ptr.parent = self.parent;
 
         var iter = self.map.iterator();
         while (iter.next()) |entry| {
-            const new_key_ptr = try self.allocator.create(PdfName);
-            errdefer self.allocator.destroy(new_key_ptr);
-            new_key_ptr.* = try (entry.key_ptr.*).clone(self.allocator);
-            errdefer new_key_ptr.*.deinit(self.allocator);
+            const original_key_name = entry.key_ptr.*;
+            const original_value_obj = entry.value_ptr.*;
 
-            const new_value_ptr = try self.allocator.create(PdfObject);
-            errdefer self.allocator.destroy(new_value_ptr);
-            new_value_ptr.* = try (entry.value_ptr.*).clone(self.allocator);
-            errdefer new_value_ptr.*.deinit(self.allocator);
+            const cloned_key_val = try original_key_name.clone(self.allocator);
+            errdefer cloned_key_val.deinit(self.allocator);
 
-            try new_dict.map.put(new_key_ptr, new_value_ptr);
+            var cloned_value_val = try original_value_obj.clone(self.allocator);
+            errdefer cloned_value_val.deinit(self.allocator);
+
+            const new_key_ptr_in_map = try self.allocator.create(PdfName);
+            new_key_ptr_in_map.* = cloned_key_val;
+            errdefer self.allocator.destroy(new_key_ptr_in_map);
+
+            const new_value_ptr_in_map = try self.allocator.create(PdfObject);
+            new_value_ptr_in_map.* = cloned_value_val;
+            errdefer self.allocator.destroy(new_value_ptr_in_map);
+
+            try new_dict_ptr.map.put(new_key_ptr_in_map, new_value_ptr_in_map);
         }
 
         var priv_iter = self.private_attrs.iterator();
         while (priv_iter.next()) |entry| {
-            const new_priv_value_ptr = try self.allocator.create(PdfObject);
-            errdefer self.allocator.destroy(new_priv_value_ptr);
-            new_priv_value_ptr.* = try entry.value_ptr.*.clone(self.allocator);
-            errdefer new_priv_value_ptr.*.deinit(self.allocator);
+            const cloned_priv_value_val = try entry.value_ptr.*.clone(self.allocator);
+            errdefer cloned_priv_value_val.deinit(self.allocator);
 
-            try new_dict.private_attrs.put(try self.allocator.dupe(u8, entry.key_ptr.*), new_priv_value_ptr);
+            const new_priv_value_ptr = try self.allocator.create(PdfObject);
+            new_priv_value_ptr.* = cloned_priv_value_val;
+            errdefer self.allocator.destroy(new_priv_value_ptr);
+
+            const cloned_key_str = try self.allocator.dupe(u8, entry.key_ptr.*);
+            errdefer self.allocator.free(cloned_key_str);
+
+            try new_dict_ptr.private_attrs.put(cloned_key_str, new_priv_value_ptr);
         }
-        return new_dict;
+        return new_dict_ptr;
     }
     pub fn setPrivate(self: *PdfDict, key: []const u8, value: PdfObject) !void {
         const new_value_ptr = try self.allocator.create(PdfObject);
@@ -265,6 +286,45 @@ pub const PdfDict = struct {
             return value_ptr.*;
         }
         return null;
+    }
+
+    /// Compares two PdfDict objects for equality.
+    /// This method performs deep comparison of resolved values.
+    /// It resolves indirect references within the dictionaries as part of the comparison.
+    /// Returns true if both dictionaries contain the same resolved PdfObjects
+    /// for the same PdfName keys, and if their stream data is identical.
+    /// Inheritable values (`parent`) and internal `private_attrs` are NOT considered for equality.
+    pub fn eql(self: *PdfDict, other: *PdfDict) !bool {
+        if (self.stream) |s1| {
+            if (other.stream) |s2| {
+                if (std.mem.eql(u8, s1, s2)) return false;
+            } else return false;
+        } else {
+            if (other.stream != null) return false;
+        }
+
+        if (self.map.count() != other.map.count()) return false;
+
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            const self_key_ptr = entry.key_ptr.*;
+
+            const self_resolved_obj_ptr = try self.get(self_key_ptr);
+            defer if (self_resolved_obj_ptr) |resolved_obj| resolved_obj.deinit();
+
+            const other_resolved_obj_ptr = try other.get(self_key_ptr);
+            defer if (other_resolved_obj_ptr) |resolved_obj| resolved_obj.deinit();
+
+            if (self_resolved_obj_ptr) |self_val| {
+                if (other_resolved_obj_ptr) |other_val| {
+                    if (!(self_val.eql(other_val))) return false;
+                } else return false;
+            } else {
+                if (other_resolved_obj_ptr) return false;
+            }
+        }
+
+        return true;
     }
 };
 

@@ -225,4 +225,32 @@ pub const PdfArray = struct {
         new_array_ptr.all_items_resolved_attempted = self.all_items_resolved_attempted;
         return new_array_ptr;
     }
+
+    /// Compares two PdfArray objects for equality.
+    /// This method resolves all items in both arrays before comparison.
+    /// Returns true if both arrays contain the same resolved PdfObjects in the same order.
+    pub fn eql(self: *PdfArray, other: *PdfArray) !bool {
+        try self.*.ensureAllItemsResolved();
+        try other.*.ensureAllItemsResolved();
+
+        if (self.items.items.len != other.items.items.len) return false;
+
+        for (self.items.items, 0..) |self_item_val, i| {
+            const other_item_val = other.items.items[i];
+
+            const self_obj = switch (self_item_val) {
+                .resolved => |resolved_obj| resolved_obj,
+                .unresolved => unreachable,
+            };
+
+            const other_obj = switch (other_item_val) {
+                .resolved => |resolved_obj| resolved_obj,
+                .unresolved => unreachable,
+            };
+
+            if (!(try self_obj.eql(other_obj, self.allocator))) return false;
+        }
+
+        return true;
+    }
 };
