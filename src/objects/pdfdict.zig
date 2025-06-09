@@ -248,7 +248,7 @@ pub const PdfDict = struct {
 
         var priv_iter = self.private_attrs.iterator();
         while (priv_iter.next()) |entry| {
-            const cloned_priv_value_val = try entry.value_ptr.*.clone(self.allocator);
+            var cloned_priv_value_val = try entry.value_ptr.*.clone(self.allocator);
             errdefer cloned_priv_value_val.deinit(self.allocator);
 
             const new_priv_value_ptr = try self.allocator.create(PdfObject);
@@ -309,18 +309,18 @@ pub const PdfDict = struct {
         while (iter.next()) |entry| {
             const self_key_ptr = entry.key_ptr.*;
 
-            const self_resolved_obj_ptr = try self.get(self_key_ptr);
-            defer if (self_resolved_obj_ptr) |resolved_obj| resolved_obj.deinit();
+            var self_resolved_obj_ptr = try self.get(self_key_ptr);
+            defer if (self_resolved_obj_ptr != null) self_resolved_obj_ptr.?.deinit(self.allocator);
 
-            const other_resolved_obj_ptr = try other.get(self_key_ptr);
-            defer if (other_resolved_obj_ptr) |resolved_obj| resolved_obj.deinit();
+            var other_resolved_obj_ptr = try other.get(self_key_ptr);
+            defer if (other_resolved_obj_ptr != null) other_resolved_obj_ptr.?.deinit(self.allocator);
 
             if (self_resolved_obj_ptr) |self_val| {
                 if (other_resolved_obj_ptr) |other_val| {
-                    if (!(self_val.eql(other_val))) return false;
+                    if (!(try self_val.eql(other_val, self.allocator))) return false;
                 } else return false;
             } else {
-                if (other_resolved_obj_ptr) return false;
+                if (other_resolved_obj_ptr != null) return false;
             }
         }
 

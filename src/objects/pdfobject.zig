@@ -98,7 +98,7 @@ pub const PdfObject = union(enum) {
         return PdfObject{ .IndirectRef = ref };
     }
 
-    pub fn eql(self: PdfObject, other: PdfObject, allocator: Allocator) !bool {
+    pub fn eql(self: PdfObject, other: PdfObject, allocator: Allocator) error{ OutOfMemory, NoSpaceLeft, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge, InvalidCharacter, InvalidPdfStringFormat, InvalidHexCharacter, InvalidOctalEscape, EncodingError, InvalidLength }!bool {
         if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
 
         return switch (self) {
@@ -110,7 +110,7 @@ pub const PdfObject = union(enum) {
             .Name => |n1| n1.eql(other.Name),
             .Array => |a1_ptr| a1_ptr.eql(other.Array),
             .Dict => |d1_ptr| d1_ptr.eql(other.Dict),
-            .IndirectRef => |ir1_ptr| ir1_ptr.eql(other.IndirectRef),
+            .IndirectRef => |ir1_ptr| ir1_ptr.eql(other.IndirectRef.*),
         };
     }
 };
