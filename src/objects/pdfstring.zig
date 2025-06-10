@@ -137,8 +137,6 @@ pub const PdfString = struct {
             .hex => true,
             .literal => false,
             .auto => blk: {
-                // Heuristic from pdfrw: use hex if escaping makes the literal string significantly longer.
-                // The threshold is when at least half the characters need escaping (`\`, `(`, or `)`).
                 var escape_count: usize = 0;
                 for (raw_bytes) |b| {
                     if (b == '(' or b == ')' or b == '\\') escape_count += 1;
@@ -149,16 +147,22 @@ pub const PdfString = struct {
 
         if (use_hex) {
             try encoded_buffer.append('<');
-            try std.fmt.format(encoded_buffer.writer(), "{X}", .{raw_bytes});
+            for (raw_bytes) |b| {
+                try std.fmt.format(encoded_buffer.writer(), "{X:0>2}", .{b});
+            }
             try encoded_buffer.append('>');
         } else {
             try encoded_buffer.append('(');
             for (raw_bytes) |b| {
                 switch (b) {
-                    '\\', '(', ')' => {
-                        try encoded_buffer.append('\\');
-                        try encoded_buffer.append(b);
-                    },
+                    '(' => try encoded_buffer.appendSlice("\\("),
+                    ')' => try encoded_buffer.appendSlice("\\)"),
+                    '\\' => try encoded_buffer.appendSlice("\\\\"),
+                    '\n' => try encoded_buffer.appendSlice("\\n"),
+                    '\r' => try encoded_buffer.appendSlice("\\r"),
+                    '\t' => try encoded_buffer.appendSlice("\\t"),
+                    0x08 => try encoded_buffer.appendSlice("\\b"),
+                    0x0C => try encoded_buffer.appendSlice("\\f"),
                     else => try encoded_buffer.append(b),
                 }
             }
