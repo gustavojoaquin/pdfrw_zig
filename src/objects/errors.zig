@@ -18,6 +18,7 @@ pub const PdfError = error{
     ObjectNotFound,
     CorruptStream,
     InvalidPdfFormat,
+    IndexOutOfBounds,
 };
 
 pub fn pdfErrorName(err: PdfError) []const u8 {
