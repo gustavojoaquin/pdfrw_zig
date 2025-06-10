@@ -81,6 +81,7 @@ pub const PdfDict = struct {
         var priv_attrs_iter = self.private_attrs.iterator();
         while (priv_attrs_iter.next()) |entry| {
             entry.value_ptr.*.deinit(self.allocator);
+            self.allocator.destroy(entry.value_ptr.*);
         }
         self.private_attrs.deinit();
     }
@@ -120,30 +121,24 @@ pub const PdfDict = struct {
                 const resolved_obj_actual_ptr = try indirect_ref_instance_ptr.*.real_value(self.allocator);
 
                 if (resolved_obj_actual_ptr) |resolved_obj| {
-                    var owned_resolved_obj = try resolved_obj.*.clone(self.allocator);
-                    errdefer owned_resolved_obj.deinit(self.allocator);
-
-                    const removed_entry = self.map.fetchRemove(map_entry.key_ptr.*).?;
-
-                    PdfDictMapContextMap.deinitKey(.{}, removed_entry.key, self.allocator);
-                    PdfDictMapContextMap.deinitValue(.{}, removed_entry.value, self.allocator);
-
-                    const new_key_for_reinsert_ptr = try (map_entry.key_ptr.*).clone_to_ptr(self.allocator);
-                    const new_value_for_reinsert_ptr = try owned_resolved_obj.clone_to_ptr(self.allocator);
-
+                    const new_value_for_map_ptr = try resolved_obj.clone_to_ptr(self.allocator);
                     errdefer {
-                        new_key_for_reinsert_ptr.*.deinit(self.allocator);
-                        self.allocator.destroy(new_key_for_reinsert_ptr);
-                        new_value_for_reinsert_ptr.*.deinit(self.allocator);
-                        self.allocator.destroy(new_value_for_reinsert_ptr);
+                        new_value_for_map_ptr.*.deinit(self.allocator);
+                        self.allocator.destroy(new_value_for_map_ptr);
                     }
 
-                    try self.map.put(new_key_for_reinsert_ptr, new_value_for_reinsert_ptr);
-                    return owned_resolved_obj;
+                    const old_value_ptr = map_entry.value_ptr.*;
+
+                    map_entry.value_ptr.* = new_value_for_map_ptr;
+
+                    old_value_ptr.*.deinit(self.allocator);
+                    self.allocator.destroy(old_value_ptr);
+
+                    return try resolved_obj.clone(self.allocator);
                 } else {
-                    const removed_obj = self.map.fetchRemove(map_entry.key_ptr.*).?;
-                    PdfDictMapContextMap.deinitKey(.{}, removed_obj.key, self.allocator);
-                    PdfDictMapContextMap.deinitValue(.{}, removed_obj.value, self.allocator);
+                    const removed_entry = self.map.fetchRemove(key).?;
+                    PdfDictMapContextMap.deinitKey(.{}, removed_entry.key, self.allocator);
+                    PdfDictMapContextMap.deinitValue(.{}, removed_entry.value, self.allocator);
                     return null;
                 }
             }
@@ -151,10 +146,10 @@ pub const PdfDict = struct {
         }
         return null;
     }
-
     pub fn setStream(self: *PdfDict, data: ?[]const u8) !void {
         self.stream = data;
         const length_key = try PdfName.init_from_raw(self.allocator, "Length");
+        defer length_key.deinit(self.allocator);
 
         if (data) |d| {
             const integer_obj = PdfObject{ .Integer = @intCast(d.len) };

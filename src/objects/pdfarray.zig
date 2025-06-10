@@ -52,6 +52,7 @@ pub const PdfArray = struct {
             }
         }
         self.items.deinit();
+        self.allocator.destroy(self);
     }
 
     /// Ensures all items in the array are resolved.
@@ -77,7 +78,7 @@ pub const PdfArray = struct {
             switch (current_item_storage_ptr.*) {
                 .unresolved => |indirect_obj_ptr| {
                     const resolved_obj_from_indirect_cache = indirect_obj_ptr.real_value(self.allocator) catch |err| {
-                        std.log.err("PdfArray: Error resolving indirect object {{obj_num={}, gen_num={}}}: {any}", .{
+                        std.log.warn("PdfArray: Failed to resolve indirect object {{obj_num={}, gen_num={}}}: {any}\n", .{
                             indirect_obj_ptr.ref.obj_num, indirect_obj_ptr.ref.gen_num, err,
                         });
                         return err;
@@ -116,18 +117,23 @@ pub const PdfArray = struct {
     /// Extends the array with items from a slice.
     /// Ownership of items in the slice is handled based on their type:
     /// - .unresolved: pointer is copied, external ownership assumed.
-    /// - .resolved: PdfObject is MOVED from the slice item into the array.
-    ///              If the slice items need to persist, they should be cloned before calling extend.
+    /// - .resolved: PdfObject is CLONED from the slice item into the array.
     pub fn extend(self: *PdfArray, new_items: []const PdfArrayItem) !void {
-        if (self.all_items_resolved_attempted) {
-            for (new_items) |item| {
-                if (item == .unresolved) {
-                    self.all_items_resolved_attempted = false;
-                    break;
-                }
+        try self.items.ensureTotalCapacity(self.items.items.len + new_items.len);
+
+        for (new_items) |item| {
+            switch (item) {
+                .unresolved => |indirect_ptr| {
+                    if (self.all_items_resolved_attempted) {
+                        self.all_items_resolved_attempted = false;
+                    }
+                    try self.items.append(.{ .unresolved = indirect_ptr });
+                },
+                .resolved => |resolved_obj| {
+                    try self.items.append(.{ .resolved = try resolved_obj.clone(self.allocator) });
+                },
             }
         }
-        try self.items.appendSlice(new_items);
     }
 
     /// Gets a pointer to the PdfObject at the given index.
@@ -153,7 +159,7 @@ pub const PdfArray = struct {
     pub fn pop(self: *PdfArray) !?PdfObject {
         try self.ensureAllItemsResolved();
 
-        if (self.items.popOrNull()) |item_value| {
+        if (self.items.pop()) |item_value| {
             return switch (item_value) {
                 .resolved => |obj_value| obj_value,
                 .unresolved => unreachable,
@@ -198,7 +204,7 @@ pub const PdfArray = struct {
         for (self.items.items) |array_item_value| {
             switch (array_item_value) {
                 .resolved => |resolved_obj_value| {
-                    if (resolved_obj_value.eql(item_to_count)) {
+                    if (try resolved_obj_value.eql(item_to_count, self.allocator)) {
                         c += 1;
                     }
                 },

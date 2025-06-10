@@ -31,10 +31,7 @@ pub const PdfObject = union(enum) {
         switch (self.*) {
             .String => |*s| s.deinit(),
             .Name => |*n| n.deinit(allocator),
-            .Array => |a_ptr| {
-                a_ptr.deinit();
-                allocator.destroy(a_ptr);
-            },
+            .Array => |a_ptr| a_ptr.deinit(),
             .Dict => |d_ptr| {
                 d_ptr.deinit();
                 allocator.destroy(d_ptr);

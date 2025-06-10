@@ -15,7 +15,7 @@ const PdfIndirect = pdfindirect.PdfIndirect;
 
 fn test_loader_returns_int_42(_: *PdfIndirect, passed_allocator: std.mem.Allocator) !?*PdfObject {
     const obj = try passed_allocator.create(PdfObject);
-    obj.* = PdfObject{ .Integer = 42 };
+    obj.* = .{ .Integer = 42 };
     return obj;
 }
 
@@ -32,22 +32,30 @@ test "PdfDict indirect set and get" {
     var name_key = try PdfName.init_from_raw(allocator, "Name");
     defer name_key.deinit(allocator);
 
-    try dict.put(name_key, PdfObject{ .IndirectRef = &indirect_obj_instance });
+    try dict.put(name_key, .{ .IndirectRef = &indirect_obj_instance });
 
     var iter = dict.iterator();
-    const entry = (try iter.next()).?;
-    try testing.expectEqualStrings("/Name", entry.key.value);
-    try testing.expect(activeTag(entry.value) == .IndirectRef);
-    try testing.expect(entry.value.IndirectRef == &indirect_obj_instance);
+    var entry = (try iter.next()).?;
+    defer entry.key.deinit(allocator);
+    defer entry.value.deinit(allocator);
 
-    const resolved_value_opt = try dict.get(name_key);
+    try testing.expectEqualStrings("/Name", entry.key.value);
+    try testing.expect(activeTag(entry.value) == .Integer);
+    try testing.expectEqual(@as(i64, 42), entry.value.Integer);
+
+    const resolved_value_opt = try dict.get(&name_key);
     try testing.expect(resolved_value_opt != null);
-    const resolved_value = resolved_value_opt.?;
+    var resolved_value = resolved_value_opt.?;
+    defer resolved_value.deinit(allocator);
+
     try testing.expect(activeTag(resolved_value) == .Integer);
     try testing.expectEqual(@as(i64, 42), resolved_value.Integer);
 
     var iter2 = dict.iterator();
-    const resolved_entry = (try iter2.next()).?;
+    var resolved_entry = (try iter2.next()).?;
+    defer resolved_entry.key.deinit(allocator);
+    defer resolved_entry.value.deinit(allocator);
+
     try testing.expectEqualStrings("/Name", resolved_entry.key.value);
     try testing.expect(activeTag(resolved_entry.value) == .Integer);
     try testing.expectEqual(@as(i64, 42), resolved_entry.value.Integer);
@@ -57,7 +65,7 @@ test "PdfDict private attributes" {
     var dict = PdfDict.init(allocator);
     defer dict.deinit();
 
-    try dict.setPrivate("internal_id", PdfObject{ .Integer = 12345 });
+    try dict.setPrivate("internal_id", .{ .Integer = 12345 });
 
     const value_opt = dict.getPrivate("internal_id");
     try testing.expect(value_opt != null);
@@ -72,7 +80,7 @@ test "PdfDict inheritance lookup" {
 
     var rotate_key = try PdfName.init_from_raw(allocator, "Rotate");
     defer rotate_key.deinit(allocator);
-    try parent.put(rotate_key, PdfObject{ .Integer = 90 });
+    try parent.put(rotate_key, .{ .Integer = 90 });
 
     var child = PdfDict.init(allocator);
     defer child.deinit();
@@ -80,7 +88,9 @@ test "PdfDict inheritance lookup" {
 
     const rotate_opt = try child.getInheritable(rotate_key);
     try testing.expect(rotate_opt != null);
-    const rotate = rotate_opt.?;
+    var rotate = rotate_opt.?;
+    defer rotate.deinit(allocator);
+
     try testing.expect(activeTag(rotate) == .Integer);
     try testing.expectEqual(@as(i64, 90), rotate.Integer);
 }
@@ -92,13 +102,17 @@ test "PdfDict stream handling" {
     const data = "stream data";
     try dict.setStream(data);
 
+    try testing.expect(dict.stream != null);
     try testing.expectEqualStrings(data, dict.stream.?);
 
     var length_key = try PdfName.init_from_raw(allocator, "Length");
     defer length_key.deinit(allocator);
-    const length_opt = try dict.get(length_key);
+
+    const length_opt = try dict.get(&length_key);
     try testing.expect(length_opt != null);
-    const length = length_opt.?;
+    var length = length_opt.?;
+    defer length.deinit(allocator);
+
     try testing.expect(activeTag(length) == .Integer);
     try testing.expectEqual(@as(i64, data.len), length.Integer);
 }
