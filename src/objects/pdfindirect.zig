@@ -94,7 +94,11 @@ pub const PdfIndirect = struct {
     }
 
     pub fn deinit(self: *PdfIndirect, allocator: std.mem.Allocator) void {
-        if (self.value) |v| v.deinit(allocator);
+        if (self.value) |v| {
+            v.deinit(allocator);
+            allocator.destroy(v);
+            self.value = null;
+        }
     }
 
     /// Checks if two PdfIndirect instances are equal.

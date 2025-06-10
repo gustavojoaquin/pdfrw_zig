@@ -128,6 +128,6 @@ pub const PdfObject = union(enum) {
     }
 
     pub fn getTag(self: PdfObject) std.meta.Tag(PdfObject) {
-        return @tagName(self);
+        return std.meta.activeTag(self);
     }
 };

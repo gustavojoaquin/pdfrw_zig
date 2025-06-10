@@ -44,6 +44,8 @@ test "PdfIndirect.init" {
 }
 
 test "PdfIndirect.real_value - first call loads object" {
+    defer pdfstring.deinitPdfDocEncoding();
+
     const allocator = std.testing.allocator;
     resetMockLoaderFlags();
 
@@ -64,69 +66,71 @@ test "PdfIndirect.real_value - first call loads object" {
     try std.testing.expectEqualStrings(unicode_val, "mock_resolved_value");
 }
 
-// test "PdfIndirect.real_value - subsequent calls don't reload" {
-//     const allocator = std.testing.allocator;
-//     resetMockLoaderFlags();
-//
-//     var indirect = PdfIndirect.init(2, 0, mockPdfLoader);
-//     defer indirect.deinit(allocator);
-//
-//     const first_loaded_ptr = (try indirect.real_value(allocator)).?;
-//     try std.testing.expectEqual(mock_loader_call_count, 1);
-//     try std.testing.expect(indirect.value != null);
-//     try std.testing.expect(first_loaded_ptr.*.tag() == .String);
-//
-//     const second_loaded_ptr = (try indirect.real_value(allocator)).?;
-//
-//     try std.testing.expectEqual(mock_loader_call_count, 1);
-//     try std.testing.expect(second_loaded_ptr == first_loaded_ptr);
-//     try std.testing.expect(second_loaded_ptr == indirect.value.?);
-//
-//     try std.testing.expect(second_loaded_ptr.*.tag() == .String);
-//     const unicode_val = try second_loaded_ptr.String.toUnicode(allocator);
-//     defer allocator.free(unicode_val);
-//     try std.testing.expectEqualStrings(unicode_val, "mock_resolved_value");
-// }
-//
-// test "PdfIndirect.real_value - loader error propagation" {
-//     const allocator = std.testing.allocator;
-//     resetMockLoaderFlags();
-//     mock_loader_should_fail = true;
-//     var indirect = PdfIndirect.init(3, 0, mockPdfLoader);
-//     defer indirect.deinit(allocator);
-//
-//     const result = indirect.real_value(allocator);
-//
-//     try std.testing.expectEqual(mock_loader_call_count, 1);
-//     // FIX 4: Expect the error we now return from the mock loader.
-//     try std.testing.expectError(errors.PdfError.ObjectNotFound, result);
-//     try std.testing.expect(indirect.value == null);
-// }
-//
-// test "PdfIndirect.eql" {
-//     const allocator = std.testing.allocator;
-//     resetMockLoaderFlags();
-//
-//     // The init calls are now valid.
-//     const indirect1_0_a = PdfIndirect.init(1, 0, mockPdfLoader);
-//     const indirect1_0_b = PdfIndirect.init(1, 0, mockPdfLoader);
-//     const indirect2_0 = PdfIndirect.init(2, 0, mockPdfLoader);
-//     const indirect1_1 = PdfIndirect.init(1, 1, mockPdfLoader);
-//
-//     var indirect1_0_loaded_a = PdfIndirect.init(1, 0, mockPdfLoader);
-//     defer indirect1_0_loaded_a.deinit(allocator);
-//     _ = try indirect1_0_loaded_a.real_value(allocator);
-//
-//     var indirect1_0_loaded_b = PdfIndirect.init(1, 0, mockPdfLoader);
-//     defer indirect1_0_loaded_b.deinit(allocator);
-//     _ = try indirect1_0_loaded_b.real_value(allocator);
-//
-//     try std.testing.expect(indirect1_0_a.eql(indirect1_0_b));
-//     try std.testing.expect(indirect1_0_a.eql(indirect1_0_loaded_a));
-//     try std.testing.expect(indirect1_0_loaded_a.eql(indirect1_0_loaded_b));
-//     try std.testing.expect(indirect1_0_a.eql(indirect1_0_a));
-//
-//     try std.testing.expect(!indirect1_0_a.eql(indirect2_0));
-//     try std.testing.expect(!indirect1_0_a.eql(indirect1_1));
-//     try std.testing.expect(!indirect2_0.eql(indirect1_1));
-// }
+test "PdfIndirect.real_value - subsequent calls don't reload" {
+    defer pdfstring.deinitPdfDocEncoding();
+
+    const allocator = std.testing.allocator;
+    resetMockLoaderFlags();
+
+    var indirect = PdfIndirect.init(2, 0, mockPdfLoader);
+    defer indirect.deinit(allocator);
+
+    const first_loaded_ptr = (try indirect.real_value(allocator)).?;
+    try std.testing.expectEqual(mock_loader_call_count, 1);
+    try std.testing.expect(indirect.value != null);
+    try std.testing.expect(first_loaded_ptr.*.getTag() == .String);
+
+    const second_loaded_ptr = (try indirect.real_value(allocator)).?;
+
+    try std.testing.expectEqual(mock_loader_call_count, 1);
+    try std.testing.expect(second_loaded_ptr == first_loaded_ptr);
+    try std.testing.expect(second_loaded_ptr == indirect.value.?);
+
+    try std.testing.expect(second_loaded_ptr.*.getTag() == .String);
+    const unicode_val = try second_loaded_ptr.String.toUnicode(allocator);
+    defer allocator.free(unicode_val);
+    try std.testing.expectEqualStrings(unicode_val, "mock_resolved_value");
+}
+
+test "PdfIndirect.real_value - loader error propagation" {
+    const allocator = std.testing.allocator;
+    resetMockLoaderFlags();
+    mock_loader_should_fail = true;
+    var indirect = PdfIndirect.init(3, 0, mockPdfLoader);
+    defer indirect.deinit(allocator);
+
+    const result = indirect.real_value(allocator);
+
+    try std.testing.expectEqual(mock_loader_call_count, 1);
+    try std.testing.expectError(errors.PdfError.ObjectNotFound, result);
+    try std.testing.expect(indirect.value == null);
+}
+
+test "PdfIndirect.eql" {
+    defer pdfstring.deinitPdfDocEncoding();
+
+    const allocator = std.testing.allocator;
+    resetMockLoaderFlags();
+
+    const indirect1_0_a = PdfIndirect.init(1, 0, mockPdfLoader);
+    const indirect1_0_b = PdfIndirect.init(1, 0, mockPdfLoader);
+    const indirect2_0 = PdfIndirect.init(2, 0, mockPdfLoader);
+    const indirect1_1 = PdfIndirect.init(1, 1, mockPdfLoader);
+
+    var indirect1_0_loaded_a = PdfIndirect.init(1, 0, mockPdfLoader);
+    defer indirect1_0_loaded_a.deinit(allocator);
+    _ = try indirect1_0_loaded_a.real_value(allocator);
+
+    var indirect1_0_loaded_b = PdfIndirect.init(1, 0, mockPdfLoader);
+    defer indirect1_0_loaded_b.deinit(allocator);
+    _ = try indirect1_0_loaded_b.real_value(allocator);
+
+    try std.testing.expect(indirect1_0_a.eql(indirect1_0_b));
+    try std.testing.expect(indirect1_0_a.eql(indirect1_0_loaded_a));
+    try std.testing.expect(indirect1_0_loaded_a.eql(indirect1_0_loaded_b));
+    try std.testing.expect(indirect1_0_a.eql(indirect1_0_a));
+
+    try std.testing.expect(!indirect1_0_a.eql(indirect2_0));
+    try std.testing.expect(!indirect1_0_a.eql(indirect1_1));
+    try std.testing.expect(!indirect2_0.eql(indirect1_1));
+}
