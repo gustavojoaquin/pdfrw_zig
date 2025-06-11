@@ -4,8 +4,9 @@
 const std = @import("std");
 const testing = std.testing;
 pub const object = @import("objects/mod.zig");
+// pub const crypt = @import("crypt.zig");
 
-pub export fn add(a: i32, b: i32) i32 {
+pub fn add(a: i32, b: i32) i32 {
     return a + b;
 }
 

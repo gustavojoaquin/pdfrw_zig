@@ -19,6 +19,10 @@ pub const PdfError = error{
     CorruptStream,
     InvalidPdfFormat,
     IndexOutOfBounds,
+    CircularParentReference,
+    InvalidTypeCast,
+    ExpectedDictionary,
+    MissingRequiredKey,
 };
 
 pub fn pdfErrorName(err: PdfError) []const u8 {

@@ -127,4 +127,72 @@ pub const PdfObject = union(enum) {
     pub fn getTag(self: PdfObject) std.meta.Tag(PdfObject) {
         return std.meta.activeTag(self);
     }
+
+    pub fn asDict(self: PdfObject) ?*PdfDict {
+        if (self.getTag() == .Dict) {
+            return self.Dict;
+        }
+        return null;
+    }
+
+    pub fn asInt(self: PdfObject) ?i64 {
+        if (self.getTag() == .Integer) {
+            return self.Integer;
+        }
+        return null;
+    }
+
+    pub fn asReal(self: PdfObject) ?f64 {
+        if (self.getTag() == .Real) {
+            return self.Real;
+        }
+        return null;
+    }
+
+    pub fn asString(self: PdfObject) ?PdfString {
+        if (self.getTag() == .String) {
+            return self.String;
+        }
+        return null;
+    }
+
+    pub fn asBytes(self: PdfObject) ?[]const u8 {
+        if (self.getTag() == .String) {
+            // Assuming PdfString.value holds the raw bytes.
+            return self.String.value;
+        }
+        return null;
+    }
+
+    pub fn asName(self: PdfObject) ?PdfName {
+        if (self.getTag() == .Name) {
+            return self.Name;
+        }
+        return null;
+    }
+
+    pub fn asArray(self: PdfObject) ?*PdfArray {
+        if (self.getTag() == .Array) {
+            return self.Array;
+        }
+        return null;
+    }
+
+    pub fn isName(self: PdfObject) bool {
+        return self.getTag() == .Name;
+    }
+
+    pub fn asBoolean(self: PdfObject) ?bool {
+        if (self.getTag() == .Boolean) {
+            return self.Boolean;
+        }
+        return null;
+    }
+
+    pub fn asIndirectRef(self: PdfObject) ?*PdfIndirect {
+        if (self.getTag() == .IndirectRef) {
+            return self.IndirectRef;
+        }
+        return null;
+    }
 };

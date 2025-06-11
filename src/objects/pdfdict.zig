@@ -61,12 +61,16 @@ pub const PdfDict = struct {
     stream: ?[]const u8 = null,
     parent: ?*PdfDict = null,
     private_attrs: std.StringHashMap(*PdfObject),
+    indirect_num: ?u32 = null,
+    indirect_gen: ?u16 = null,
 
     pub fn init(allocator: Allocator) PdfDict {
         return .{
             .allocator = allocator,
             .map = std.HashMap(*const PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage).init(allocator),
             .private_attrs = std.StringHashMap(*PdfObject).init(allocator),
+            .indirect_num = null,
+            .indirect_gen = null,
         };
     }
 
@@ -209,6 +213,8 @@ pub const PdfDict = struct {
         }
 
         new_dict_ptr.indirect = self.indirect;
+        new_dict_ptr.indirect_num = self.indirect_num; 
+        new_dict_ptr.indirect_gen = self.indirect_gen; 
 
         if (self.stream) |s| {
             new_dict_ptr.stream = try self.allocator.dupe(u8, s);
