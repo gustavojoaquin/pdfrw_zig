@@ -10,8 +10,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const rc4_mod = b.createModule(.{ .root_source_file = b.path("src/rc4.zig"), .target = target, .optimize = optimize });
+
     const lib_mod = b.addModule("pdfrw_zig", .{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .imports = &.{
         .{ .name = "crypt", .module = crypt_mod },
+        .{ .name = "rc4", .module = rc4_mod },
     } });
 
     const test_objects_mod = b.createModule(.{
@@ -20,7 +23,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const test_crypt_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_crypt.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "crypt", .module = crypt_mod }} });
+    const test_crypt_mod = b.createModule(.{
+        .root_source_file = b.path("src/tests/test_crypt.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "crypt", .module = crypt_mod },
+            .{ .name = "rc4", .module = rc4_mod }
+        }
+    });
 
     const lib = b.addStaticLibrary(.{
         .name = "pdfrw_zig",

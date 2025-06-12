@@ -2,8 +2,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Md5 = std.crypto.hash.Md5;
-const AesBlock = std.crypto.aes.Aes;
-const Rc4 = std.crypto.rc4.RC4;
+const Aes128 = std.crypto.core.aes.Aes128;
+const cbc = std.crypto.modes.cbc;
+const rc4_mod = @import("rc4");
+const Rc4 = rc4_mod.RC4;
 
 const objects_mod = @import("objects/mod.zig");
 const PdfName = objects_mod.pdfname.PdfName;
@@ -59,7 +61,8 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
     defer length_name.deinit(allocator);
     const length_obj = try encrypt.get(&length_name);
     const key_size_bits = if (length_obj) |obj| obj.asInt() orelse 40 else 40;
-    const key_size: usize = @intCast(std.math.divTrunc(i64, key_size_bits, 8));
+    // const key_size: usize = @intCast(std.math.divTrunc(i64, key_size_bits, 8));
+    const key_size: usize = @intCast(@divTrunc(key_size_bits, 8));
 
     const padded_pass = blk: {
         if (password.len >= 32) {
@@ -213,11 +216,12 @@ pub const AESCryptFilter = struct {
         const decrypted_padded = try allocator.alloc(u8, ciphertext.len);
         errdefer allocator.free(decrypted_padded);
 
-        AesBlock.decrypt_cbc(
+        cbc.decrypt_cbc(
+            Aes128,
+            hash[0 .. Aes128.key_bits / 8],
+            iv,
             ciphertext,
             decrypted_padded,
-            hash,
-            iv,
         ) catch |e| {
             std.log.err("AES decryption failed: {any}", .{e});
             return CryptError.AESDecryptionFailed;
@@ -356,4 +360,3 @@ pub fn decryptObjects(
         try obj.setPrivate("decrypted", decrypted_flag);
     }
 }
-

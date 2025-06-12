@@ -7,8 +7,8 @@ const AESCryptFilter = crypt.AESCryptFilter;
 const RC4CryptFilter = crypt.RC4CryptFilter;
 const IdentityCryptFilter = crypt.IdentityCryptFilter;
 
-const AesBlock = std.crypto.aes.Aes;
-const rc4_mod = std.crypto.rc4;
+const AesBlock = std.crypto.core.aes;
+const rc4_mod = @import("rc4");
 const RC4 = rc4_mod.RC4;
 
 const objects_mod = @import("../objects/mod.zig");
@@ -536,7 +536,7 @@ test "decryptObjects processes stream objects with default filter" {
     defer filters_map.deinit();
 
     var pdf_dicts_list = [_]PdfDict{ dict1_val, dict2_val, dict3_val };
-    try crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator); 
+    try crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator);
 
     // Verify dict1 was decrypted by default filter
     try std.testing.expect(pdf_dicts_list[0].stream != null);
@@ -568,7 +568,7 @@ test "decryptObjects overrides default filter with named Crypt filter" {
     defer allocator.free(iv);
 
     var aes_test_key_ext_buf: [5]u8 = undefined;
-    std.mem.writeInt(u24, aes_test_key_ext_buf[0..3], @as(u24, dict_with_custom_filter_val.indirect_num.?), .little); 
+    std.mem.writeInt(u24, aes_test_key_ext_buf[0..3], @as(u24, dict_with_custom_filter_val.indirect_num.?), .little);
     std.mem.writeInt(u16, aes_test_key_ext_buf[3..5], dict_with_custom_filter_val.indirect_gen.?, .little);
 
     var md5_aes = std.crypto.hash.Md5.init(.{});
@@ -623,7 +623,7 @@ test "decryptObjects overrides default filter with named Crypt filter" {
     try filters_map.put("MyAESFilter", CryptFilter{ .AES = custom_aes_filter_instance });
 
     var pdf_dicts_list = [_]PdfDict{dict_with_custom_filter_val};
-    try crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator); 
+    try crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator);
 
     try std.testing.expect(pdf_dicts_list[0].stream != null);
     try std.testing.expectEqualStrings(plaintext, pdf_dicts_list[0].stream.?);
@@ -658,7 +658,7 @@ test "decryptObjects handles missing named filter in map" {
     defer filters_map.deinit();
 
     var pdf_dicts_list = [_]PdfDict{dict_with_custom_filter_val};
-    const err = crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator) catch |e| { 
+    const err = crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator) catch |e| {
         try std.testing.expectEqual(e, crypt.CryptError.UnsupportedFilter);
         return;
     };
