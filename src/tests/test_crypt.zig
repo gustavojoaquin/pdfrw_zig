@@ -8,10 +8,12 @@ const RC4CryptFilter = crypt.RC4CryptFilter;
 const IdentityCryptFilter = crypt.IdentityCryptFilter;
 
 const AesBlock = std.crypto.core.aes;
+const Aes128 = std.crypto.core.aes.Aes128;
 const rc4_mod = @import("rc4");
+const cbc = std.crypto.modes.cbc;
 const RC4 = rc4_mod.RC4;
 
-const objects_mod = @import("../objects/mod.zig");
+const objects_mod = @import("object").objects_mod;
 const PdfDict = objects_mod.pdfdict.PdfDict;
 const PdfName = objects_mod.pdfname.PdfName;
 const PdfObject = objects_mod.pdfobject.PdfObject;
@@ -63,36 +65,31 @@ fn hexToBytes(hex_str: []const u8) []u8 {
     return bytes;
 }
 
-var mock_xref_table = std.StringHashMap(PdfObject).init(test_allocator);
+pub var mock_xref_table = std.StringHashMap(PdfObject).init(test_allocator);
 
-/// Mock function for `PdfIndirect.real_value`.
-/// It looks up the object in `mock_xref_table` using a string key.
-/// Note: In a real PDF parser, this would involve a complex xref table lookup.
-fn mockPdfIndirectRealValue(ref: PdfRef, allocator: std.mem.Allocator) anyerror!?*PdfObject {
-    const key_buf = std.fmt.bufPrint(std.testing.allocator.alloc(u8, 32) catch unreachable, "{d} {d} R", .{ ref.obj_num, ref.gen_num }) catch unreachable;
-    defer std.testing.allocator.free(key_buf);
-
-    if (mock_xref_table.get(key_buf)) |obj_ptr| {
-        const cloned_obj = try obj_ptr.*.clone_to_ptr(allocator);
-        return cloned_obj;
-    }
-    return null;
+// Assign the global mock_xref_table to the external var in pdfindirect.zig
+// This ensures that PdfObject's asDict/asInt etc. calls use our mock.
+// This must be done in a test block or a `comptime` block if needed globally.
+test "setup mock_xref_table for PdfIndirect" {
+    PdfIndirect.mock_xref_table = mock_xref_table; // Assign the global variable
+    // You might also clear the map at the start of each test or handle setup/teardown
+    // as needed for more complex scenarios.
 }
 
 test "streamObjects iterates only stream-containing PdfDicts" {
-    var dict1_val = PdfDict.init(test_allocator);
+    var dict1_val = PdfDict.init(test_allocator) catch unreachable;
     defer dict1_val.deinit();
-    var dict2_val = PdfDict.init(test_allocator);
+    var dict2_val = PdfDict.init(test_allocator) catch unreachable;
     defer dict2_val.deinit();
-    var dict3_val = PdfDict.init(test_allocator);
+    var dict3_val = PdfDict.init(test_allocator) catch unreachable;
     defer dict3_val.deinit();
 
     try dict1_val.setStream("stream content 1");
     try dict2_val.setStream(null);
     try dict3_val.setStream("stream content 2");
 
-    var pdf_dicts = [_]PdfDict{ dict1_val, dict2_val, dict3_val };
-    var it = crypt.streamObjects(&pdf_dicts[0..]);
+    var pdf_dicts = [_]PdfDict{ dict1_val.*, dict2_val.*, dict3_val.* }; // Convert pointers to values for array literal
+    var it = crypt.streamObjects(pdf_dicts[0..]);
 
     var count: usize = 0;
     while (it.next()) |obj_ptr| {
@@ -402,7 +399,7 @@ test "AESCryptFilter decrypts data correctly" {
     const test_gen: u16 = 0;
 
     var key_ext_buf: [5]u8 = undefined;
-    std.mem.writeInt(u24, key_ext_buf[0..3], @as(u24, test_num), .little);
+    std.mem.writeInt(u24, key_ext_buf[0..3], @intCast(test_num), .little);
     std.mem.writeInt(u16, key_ext_buf[3..5], test_gen, .little);
 
     var md5 = std.crypto.hash.Md5.init(.{});
@@ -421,7 +418,8 @@ test "AESCryptFilter decrypts data correctly" {
 
     const simulated_ciphertext = try allocator.alloc(u8, padded_plaintext.len);
     defer allocator.free(simulated_ciphertext);
-    AesBlock.encrypt_cbc(
+    cbc.encrypt_cbc(
+        Aes128,
         padded_plaintext,
         simulated_ciphertext,
         derived_aes_key,
@@ -453,7 +451,7 @@ test "AESCryptFilter handles invalid padding" {
     try malformed_data_input.appendSlice(iv);
     var temp_cipher_text = try allocator.alloc(u8, 16);
     defer allocator.free(temp_cipher_text);
-    std.mem.set(u8, temp_cipher_text, 0xAA);
+    std.mem.set(temp_cipher_text, 0xAA);
     temp_cipher_text[15] = 20;
     try malformed_data_input.appendSlice(temp_cipher_text);
 
@@ -477,7 +475,7 @@ test "RC4CryptFilter decrypts data correctly" {
     const test_gen: u16 = 45;
 
     var key_ext_buf: [5]u8 = undefined;
-    std.mem.writeInt(u24, key_ext_buf[0..3], @as(u24, test_num), .little);
+    std.mem.writeInt(u24, key_ext_buf[0..3], @intCast(test_num), .little);
     std.mem.writeInt(u16, key_ext_buf[3..5], test_gen, .little);
 
     var md5 = std.crypto.hash.Md5.init(.{});
@@ -511,32 +509,32 @@ test "IdentityCryptFilter returns data unchanged" {
 test "decryptObjects processes stream objects with default filter" {
     const allocator = test_allocator;
 
-    var dict1_val = PdfDict.init(allocator);
-    defer dict1_val.deinit();
-    dict1_val.indirect_num = 1;
-    dict1_val.indirect_gen = 0;
-    try dict1_val.setStream("Default Filter Encrypted Data");
+    var dict1_val_ptr = PdfDict.init(allocator) catch unreachable;
+    defer dict1_val_ptr.deinit();
+    dict1_val_ptr.indirect_num = 1;
+    dict1_val_ptr.indirect_gen = 0;
+    try dict1_val_ptr.setStream("Default Filter Encrypted Data");
 
-    var dict2_val = PdfDict.init(allocator);
-    defer dict2_val.deinit();
-    dict2_val.indirect_num = 2;
-    dict2_val.indirect_gen = 0;
-    try dict2_val.setStream(null);
+    var dict2_val_ptr = PdfDict.init(allocator) catch unreachable;
+    defer dict2_val_ptr.deinit();
+    dict2_val_ptr.indirect_num = 2;
+    dict2_val_ptr.indirect_gen = 0;
+    try dict2_val_ptr.setStream(null);
 
-    var dict3_val = PdfDict.init(allocator);
-    defer dict3_val.deinit();
-    dict3_val.indirect_num = 3;
-    dict3_val.indirect_gen = 0;
-    try dict3_val.setStream("Already Decrypted Data");
-    try dict3_val.setPrivate("decrypted", initPdfObjectBool(true));
+    var dict3_val_ptr = PdfDict.init(allocator) catch unreachable;
+    defer dict3_val_ptr.deinit();
+    dict3_val_ptr.indirect_num = 3;
+    dict3_val_ptr.indirect_gen = 0;
+    try dict3_val_ptr.setStream("Already Decrypted Data");
+    try dict3_val_ptr.setPrivate("decrypted", initPdfObjectBool(true));
 
     const default_filter_instance = IdentityCryptFilter{};
     const default_filter_union = CryptFilter{ .Identity = default_filter_instance };
     var filters_map = std.StringHashMap(CryptFilter).init(allocator);
     defer filters_map.deinit();
 
-    var pdf_dicts_list = [_]PdfDict{ dict1_val, dict2_val, dict3_val };
-    try crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator);
+    var pdf_dicts_list = [_]PdfDict{ dict1_val_ptr.*, dict2_val_ptr.*, dict3_val_ptr.* }; // Convert pointers to values
+    try crypt.decryptObjects(pdf_dicts_list[0..], default_filter_union, filters_map, allocator);
 
     // Verify dict1 was decrypted by default filter
     try std.testing.expect(pdf_dicts_list[0].stream != null);
@@ -556,10 +554,10 @@ test "decryptObjects processes stream objects with default filter" {
 test "decryptObjects overrides default filter with named Crypt filter" {
     const allocator = test_allocator;
 
-    var dict_with_custom_filter_val = PdfDict.init(allocator);
-    defer dict_with_custom_filter_val.deinit();
-    dict_with_custom_filter_val.indirect_num = 10;
-    dict_with_custom_filter_val.indirect_gen = 0;
+    var dict_with_custom_filter_val_ptr = PdfDict.init(allocator) catch unreachable;
+    defer dict_with_custom_filter_val_ptr.deinit();
+    dict_with_custom_filter_val_ptr.indirect_num = 10;
+    dict_with_custom_filter_val_ptr.indirect_gen = 0;
 
     const aes_filter_key = hexToBytes("A0A1A2A3A4A5A6A7A8A9AAABACADAEAF");
     defer allocator.free(aes_filter_key);
@@ -568,8 +566,8 @@ test "decryptObjects overrides default filter with named Crypt filter" {
     defer allocator.free(iv);
 
     var aes_test_key_ext_buf: [5]u8 = undefined;
-    std.mem.writeInt(u24, aes_test_key_ext_buf[0..3], @as(u24, dict_with_custom_filter_val.indirect_num.?), .little);
-    std.mem.writeInt(u16, aes_test_key_ext_buf[3..5], dict_with_custom_filter_val.indirect_gen.?, .little);
+    std.mem.writeInt(u24, aes_test_key_ext_buf[0..3], @intCast(dict_with_custom_filter_val_ptr.indirect_num.?), .little);
+    std.mem.writeInt(u16, aes_test_key_ext_buf[3..5], dict_with_custom_filter_val_ptr.indirect_gen.?, .little);
 
     var md5_aes = std.crypto.hash.Md5.init(.{});
     md5_aes.update(aes_filter_key);
@@ -587,7 +585,8 @@ test "decryptObjects overrides default filter with named Crypt filter" {
 
     const simulated_ciphertext_aes = try allocator.alloc(u8, padded_plaintext.len);
     defer allocator.free(simulated_ciphertext_aes);
-    AesBlock.encrypt_cbc(
+    cbc.encrypt_cbc(
+        Aes128,
         padded_plaintext,
         simulated_ciphertext_aes,
         derived_aes_key_for_stream,
@@ -598,7 +597,7 @@ test "decryptObjects overrides default filter with named Crypt filter" {
     defer data_input_aes.deinit();
     try data_input_aes.appendSlice(iv);
     try data_input_aes.appendSlice(simulated_ciphertext_aes);
-    try dict_with_custom_filter_val.setStream(data_input_aes.items);
+    try dict_with_custom_filter_val_ptr.setStream(data_input_aes.items);
 
     const filter_array_ptr = initPdfObjectArray();
     defer filter_array_ptr.deinit();
@@ -610,8 +609,8 @@ test "decryptObjects overrides default filter with named Crypt filter" {
         allocator.destroy(decode_parms_dict_ptr);
     }
     try decode_parms_dict_ptr.put(initPdfName("Name"), PdfObject{ .Name = initPdfName("MyAESFilter") });
-    try dict_with_custom_filter_val.put(initPdfName("DecodeParms"), PdfObject{ .Dict = decode_parms_dict_ptr });
-    try dict_with_custom_filter_val.put(initPdfName("Filter"), PdfObject{ .Array = filter_array_ptr });
+    try dict_with_custom_filter_val_ptr.put(initPdfName("DecodeParms"), PdfObject{ .Dict = decode_parms_dict_ptr });
+    try dict_with_custom_filter_val_ptr.put(initPdfName("Filter"), PdfObject{ .Array = filter_array_ptr });
 
     const default_filter_instance = IdentityCryptFilter{};
     const default_filter_union = CryptFilter{ .Identity = default_filter_instance };
@@ -622,8 +621,8 @@ test "decryptObjects overrides default filter with named Crypt filter" {
     defer filters_map.deinit();
     try filters_map.put("MyAESFilter", CryptFilter{ .AES = custom_aes_filter_instance });
 
-    var pdf_dicts_list = [_]PdfDict{dict_with_custom_filter_val};
-    try crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator);
+    var pdf_dicts_list = [_]PdfDict{dict_with_custom_filter_val_ptr.*}; // Convert pointer to value
+    try crypt.decryptObjects(pdf_dicts_list[0..], default_filter_union, filters_map, allocator);
 
     try std.testing.expect(pdf_dicts_list[0].stream != null);
     try std.testing.expectEqualStrings(plaintext, pdf_dicts_list[0].stream.?);
@@ -633,11 +632,11 @@ test "decryptObjects overrides default filter with named Crypt filter" {
 test "decryptObjects handles missing named filter in map" {
     const allocator = test_allocator;
 
-    var dict_with_custom_filter_val = PdfDict.init(allocator);
-    defer dict_with_custom_filter_val.deinit();
-    dict_with_custom_filter_val.indirect_num = 10;
-    dict_with_custom_filter_val.indirect_gen = 0;
-    try dict_with_custom_filter_val.setStream("dummy data");
+    var dict_with_custom_filter_val_ptr = PdfDict.init(allocator) catch unreachable;
+    defer dict_with_custom_filter_val_ptr.deinit();
+    dict_with_custom_filter_val_ptr.indirect_num = 10;
+    dict_with_custom_filter_val_ptr.indirect_gen = 0;
+    try dict_with_custom_filter_val_ptr.setStream("dummy data");
 
     const filter_array_ptr = initPdfObjectArray();
     defer filter_array_ptr.deinit();
@@ -649,16 +648,16 @@ test "decryptObjects handles missing named filter in map" {
         allocator.destroy(decode_parms_dict_ptr);
     }
     try decode_parms_dict_ptr.put(initPdfName("Name"), PdfObject{ .Name = initPdfName("NonExistentFilter") });
-    try dict_with_custom_filter_val.put(initPdfName("DecodeParms"), PdfObject{ .Dict = decode_parms_dict_ptr });
-    try dict_with_custom_filter_val.put(initPdfName("Filter"), PdfObject{ .Array = filter_array_ptr });
+    try dict_with_custom_filter_val_ptr.put(initPdfName("DecodeParms"), PdfObject{ .Dict = decode_parms_dict_ptr });
+    try dict_with_custom_filter_val_ptr.put(initPdfName("Filter"), PdfObject{ .Array = filter_array_ptr });
 
     const default_filter_instance = IdentityCryptFilter{};
     const default_filter_union = CryptFilter{ .Identity = default_filter_instance };
     var filters_map = std.StringHashMap(CryptFilter).init(allocator);
     defer filters_map.deinit();
 
-    var pdf_dicts_list = [_]PdfDict{dict_with_custom_filter_val};
-    const err = crypt.decryptObjects(&pdf_dicts_list[0..], default_filter_union, filters_map, allocator) catch |e| {
+    var pdf_dicts_list = [_]PdfDict{dict_with_custom_filter_val_ptr.*}; // Convert pointer to value
+    const err = crypt.decryptObjects(pdf_dicts_list[0..], default_filter_union, filters_map, allocator) catch |e| {
         try std.testing.expectEqual(e, crypt.CryptError.UnsupportedFilter);
         return;
     };

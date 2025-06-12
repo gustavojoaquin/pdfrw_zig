@@ -11,7 +11,7 @@ pub const RC4 = struct {
         return rc4;
     }
 
-    fn initState(self: *RC4, key: []const u8) RC4 {
+    fn initState(self: *RC4, key: []const u8) void {
         for (0..256) |i| {
             self.s[i] = @intCast(i);
         }

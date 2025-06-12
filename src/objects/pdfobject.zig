@@ -156,10 +156,10 @@ pub const PdfObject = union(enum) {
         return null;
     }
 
-    pub fn asBytes(self: PdfObject) ?[]const u8 {
+    pub fn asBytes(self: PdfObject) !?[]const u8 {
         if (self.getTag() == .String) {
             // Assuming PdfString.value holds the raw bytes.
-            return self.String.value;
+            return try self.String.toBytes(self.String.allocator);
         }
         return null;
     }

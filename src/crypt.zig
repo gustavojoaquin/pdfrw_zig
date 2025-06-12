@@ -309,9 +309,9 @@ pub fn decryptObjects(
         if (try obj.get(&filter_name_key)) |filter_obj| {
             var filter_list_items: []PdfObject = undefined;
             if (filter_obj.asArray()) |arr| {
-                filter_list_items = arr.items;
+                filter_list_items = arr.items.items;
             } else {
-                filter_list_items = &.{filter_obj};
+                filter_list_items = &.{filter_obj.*};
             }
 
             const crypt_name_key = try PdfName.init_from_raw(tmp_allocator.allocator(), "Crypt");
