@@ -4,17 +4,24 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Create internal modules (not exposed to library users)
     const rc4_mod = b.createModule(.{ .root_source_file = b.path("src/rc4.zig"), .target = target, .optimize = optimize });
+    const objects_mod = b.createModule(.{
+        .root_source_file = b.path("src/objects/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
-    const crypt_mod = b.createModule(.{ .root_source_file = b.path("src/crypt.zig"), .target = target, .optimize = optimize, .imports = &.{.{
-        .name = "rc4",
-        .module = rc4_mod,
-    }} });
-
-    const lib_mod = b.addModule("pdfrw_zig", .{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .imports = &.{
-        .{ .name = "crypt", .module = crypt_mod },
+    const crypt_mod = b.createModule(.{ .root_source_file = b.path("src/crypt.zig"), .target = target, .optimize = optimize, .imports = &.{
         .{ .name = "rc4", .module = rc4_mod },
+        .{ .name = "object", .module = objects_mod },
     } });
+
+    const lib_mod = b.addModule("pdfrw_zig", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const test_objects_mod = b.createModule(.{
         .root_source_file = b.path("src/objects/test_mod.zig"),
@@ -22,7 +29,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const test_crypt_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_crypt.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "crypt", .module = crypt_mod }, .{ .name = "rc4", .module = rc4_mod } } });
+    const test_crypt_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_crypt.zig"), .target = target, .optimize = optimize, .imports = &.{
+        .{ .name = "crypt", .module = crypt_mod },
+        .{ .name = "rc4", .module = rc4_mod },
+        .{ .name = "object", .module = objects_mod },
+    } });
 
     const lib = b.addStaticLibrary(.{
         .name = "pdfrw_zig",
