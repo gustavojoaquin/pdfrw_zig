@@ -124,6 +124,9 @@ pub const PdfString = struct {
     encoded_bytes: []const u8,
     allocator: Allocator,
 
+    pub fn rawBytes(self: PdfString) []const u8 {
+        return self.encoded_bytes;
+    }
     /// Creates a `PdfString` by encoding a slice of raw bytes.
     /// - `allocator`: Allocator for the new `PdfString`'s memory.
     /// - `raw_bytes`: The unencoded byte sequence to be wrapped in a PDF string.

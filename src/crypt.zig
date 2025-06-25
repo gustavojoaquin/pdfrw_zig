@@ -2,7 +2,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Md5 = std.crypto.hash.Md5;
-const Aes128 = std.crypto.core.aes.Aes128;
 const rc4_mod = @import("rc4");
 const Rc4 = rc4_mod.RC4;
 
@@ -10,9 +9,57 @@ const objects_mod = @import("object");
 const PdfName = objects_mod.pdfname.PdfName;
 const PdfDict = objects_mod.pdfdict.PdfDict;
 const PdfObject = objects_mod.pdfobject.PdfObject;
+const PdfArray = objects_mod.pdfarray.PdfArray;
+const PdfArrayItem = objects_mod.pdfarray.PdfArrayItem;
+const aes = std.crypto.core.aes;
 
 /// Password padding string from the PDF 1.7 Specification, Algorithm 3.2.
 const PASSWORD_PAD = "(\xbfN^Nu\x8aAd\x00NV\xff\xfa\x01\x08..\x00\xb6\xd0h>\x80/\x0c\xa9\xfedSiz";
+
+pub fn encryptCbcAes128(
+    input: []const u8,
+    output: []u8,
+    key: [16]u8,
+    iv: [16]u8,
+) void {
+    std.debug.assert(input.len % 16 == 0);
+    std.debug.assert(output.len == input.len);
+    var block: [16]u8 = undefined;
+    var prev = iv;
+    var i: usize = 0;
+    var cipher = aes.Aes128.initEnc(key);
+    while (i < input.len) : (i += 16) {
+        const block_in = input[i..][0..16];
+        for (block, 0..) |_, j| {
+            block[j] = block_in[j] ^ prev[j];
+        }
+        cipher.encrypt(&block, block_in);
+        @memcpy(output[i..][0..16], &block);
+        prev = block;
+    }
+}
+
+pub fn decryptCbcAes128(
+    input: []const u8,
+    output: []u8,
+    key: [16]u8,
+    iv: [16]u8,
+) void {
+    std.debug.assert(input.len % 16 == 0);
+    std.debug.assert(output.len == input.len);
+    var block: [16]u8 = undefined;
+    var prev = iv;
+    var i: usize = 0;
+    var cipher = aes.Aes128.init(key);
+    while (i < input.len) : (i += 16) {
+        const block_in = input[i..][0..16];
+        cipher.decryptBlock(&block, block_in);
+        for (output[i..][0..16], 0..) |*out_byte, j| {
+            out_byte.* = block[j] ^ prev[j];
+        }
+        prev = block_in;
+    }
+}
 
 /// Errors that can occur during PDF decryption operations.
 pub const CryptError = error{
@@ -24,6 +71,7 @@ pub const CryptError = error{
     InvalidPadding,
     AESDecryptionFailed,
     UnsupportedFilter,
+    InvalidArrayItemType,
 };
 
 /// Iterator for objects that have a stream to be processed.
@@ -53,12 +101,16 @@ pub fn streamObjects(list: []PdfDict) StreamIterator {
 pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u8 {
     const encrypt_name = try PdfName.init_from_raw(allocator, "Encrypt");
     defer encrypt_name.deinit(allocator);
-    const encrypt_obj = (try doc.get(&encrypt_name)) orelse return CryptError.MissingEncryptDict;
+    var encrypt_obj = (try doc.get(&encrypt_name)) orelse return CryptError.MissingEncryptDict;
+    defer encrypt_obj.deinit(allocator);
     const encrypt = encrypt_obj.asDict() orelse return CryptError.EncryptEntryNotADict;
 
     const length_name = try PdfName.init_from_raw(allocator, "Length");
     defer length_name.deinit(allocator);
-    const length_obj = try encrypt.get(&length_name);
+    var length_obj = try encrypt.get(&length_name);
+    if (length_obj != null) {
+        defer length_obj.?.deinit(allocator);
+    }
     const key_size_bits = if (length_obj) |obj| obj.asInt() orelse 40 else 40;
     const key_size: usize = @intCast(@divTrunc(key_size_bits, 8));
 
@@ -68,7 +120,7 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
         }
         var buf: [32]u8 = undefined;
         @memcpy(buf[0..password.len], password);
-        @memcpy(buf[password.len..], PASSWORD_PAD[0 .. 32 - password.len]);
+        @memcpy(buf[password.len..], PASSWORD_PAD[password.len..32]);
         break :blk &buf;
     };
 
@@ -77,12 +129,17 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
 
     const o_name = try PdfName.init_from_raw(allocator, "O");
     defer o_name.deinit(allocator);
-    const o_val = (try encrypt.get(&o_name)) orelse return CryptError.MissingRequiredDictKey;
-    md5.update((try o_val.asBytes()) orelse return CryptError.DictKeyHasWrongType);
+    var o_val = (try encrypt.get(&o_name)) orelse return CryptError.MissingRequiredDictKey;
+    defer o_val.deinit(allocator);
+    const o_string = o_val.asString() orelse return CryptError.DictKeyHasWrongType;
+    md5.update(o_string.rawBytes());
 
     const p_name = try PdfName.init_from_raw(allocator, "P");
     defer p_name.deinit(allocator);
-    const p_obj = try encrypt.get(&p_name);
+    var p_obj = try encrypt.get(&p_name);
+    if (p_obj != null) {
+        defer p_obj.?.deinit(allocator);
+    }
     const p_val: i32 = if (p_obj) |obj| @intCast(obj.asInt() orelse 0) else 0;
     var p_buf: [4]u8 = undefined;
     std.mem.writeInt(i32, &p_buf, p_val, .little);
@@ -90,26 +147,30 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
 
     const id_name = try PdfName.init_from_raw(allocator, "ID");
     defer id_name.deinit(allocator);
-    const id_obj = (try doc.get(&id_name)) orelse return CryptError.InvalidID;
+    var id_obj = (try doc.get(&id_name)) orelse return CryptError.InvalidID;
+    defer id_obj.deinit(allocator);
     const id_array = id_obj.asArray() orelse return CryptError.DictKeyHasWrongType;
     if (id_array.len() == 0) return CryptError.InvalidID;
     const first_id_obj = try id_array.get(0);
-    const first_id_bytes = (try first_id_obj.asBytes()) orelse return CryptError.DictKeyHasWrongType;
-    md5.update(first_id_bytes);
+    const first_id_string = first_id_obj.asString() orelse return CryptError.DictKeyHasWrongType;
+    md5.update(first_id_string.rawBytes());
 
     var temp_hash: [16]u8 = undefined;
     md5.final(&temp_hash);
 
     const r_name = try PdfName.init_from_raw(allocator, "R");
     defer r_name.deinit(allocator);
-    const r_obj = try encrypt.get(&r_name);
+    var r_obj = try encrypt.get(&r_name);
+    if (r_obj != null) {
+        defer r_obj.?.deinit(allocator);
+    }
     const revision = if (r_obj) |obj| obj.asInt() orelse 0 else 0;
 
     if (revision >= 3) {
         var round_hash = temp_hash;
         for (0..50) |_| {
             var round_md5 = Md5.init(.{});
-            round_md5.update(round_hash[0..key_size]);
+            round_md5.update(&round_hash);
             round_md5.final(&round_hash);
         }
         return allocator.dupe(u8, round_hash[0..key_size]);
@@ -122,11 +183,15 @@ pub fn createUserHash(key: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
     const encrypt_name = try PdfName.init_from_raw(allocator, "Encrypt");
     defer encrypt_name.deinit(allocator);
     const encrypt_obj = (try doc.get(&encrypt_name)) orelse return CryptError.MissingEncryptDict;
+    defer encrypt_obj.deinit(allocator);
     const encrypt = encrypt_obj.asDict() orelse return CryptError.EncryptEntryNotADict;
 
     const r_name = try PdfName.init_from_raw(allocator, "R");
     defer r_name.deinit(allocator);
     const r_obj = try encrypt.get(&r_name);
+    if (r_obj) |obj| {
+        defer obj.deinit(allocator);
+    }
     const revision = if (r_obj) |obj| obj.asInt() orelse 0 else 0;
 
     if (revision < 3) {
@@ -150,8 +215,8 @@ pub fn createUserHash(key: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
         var temp_hash: [16]u8 = undefined;
         md5.final(&temp_hash);
 
-        std.debug.assert(key.len <= 16);
-        var temp_key_buf: [16]u8 = undefined;
+        std.debug.assert(key.len <= 32);
+        var temp_key_buf: [32]u8 = undefined;
         const temp_key_slice = temp_key_buf[0..key.len];
 
         for (0..20) |i| {
@@ -173,16 +238,22 @@ pub fn checkUserPassword(key: []const u8, doc: *PdfDict, allocator: Allocator) !
     const encrypt_name = try PdfName.init_from_raw(allocator, "Encrypt");
     defer encrypt_name.deinit(allocator);
     const encrypt_obj = (try doc.get(&encrypt_name)) orelse return CryptError.MissingEncryptDict;
+    defer encrypt_obj.deinit(allocator);
     const encrypt = encrypt_obj.asDict() orelse return CryptError.EncryptEntryNotADict;
 
     const u_name = try PdfName.init_from_raw(allocator, "U");
     defer u_name.deinit(allocator);
     const stored_hash_obj = (try encrypt.get(&u_name)) orelse return CryptError.MissingRequiredDictKey;
+    defer stored_hash_obj.deinit(allocator);
     const stored_hash = (try stored_hash_obj.asBytes()) orelse return CryptError.DictKeyHasWrongType;
+    defer allocator.free(stored_hash);
 
     const r_name = try PdfName.init_from_raw(allocator, "R");
     defer r_name.deinit(allocator);
     const r_obj = try encrypt.get(&r_name);
+    if (r_obj) |obj| {
+        obj.deinit(allocator);
+    }
     const revision = if (r_obj) |obj| obj.asInt() orelse 0 else 0;
 
     return if (revision < 3)
@@ -214,15 +285,20 @@ pub const AESCryptFilter = struct {
         const decrypted_padded = try allocator.alloc(u8, ciphertext.len);
         errdefer allocator.free(decrypted_padded);
 
-        const AesCbc = std.crypto.core.aes.Cbc(Aes128);
-        var cbc_decryptor = AesCbc.init(.{
-            .key = &hash,
-            .iv = iv,
-        });
-        if (ciphertext.len % Aes128.block_len != 0) {
-            return CryptError.AESDecryptionFailed;
+        var cipher = aes.Aes128.initDec(hash[0..16].*);
+
+        var block: [16]u8 = undefined;
+        var prev_block_in: [16]u8 = undefined;
+        var i: usize = 0;
+        while (i < ciphertext.len) : (i += 16) {
+            const block_in = ciphertext[i..][0..16];
+            cipher.decrypt(&block, block_in);
+            for (decrypted_padded[i..][0..16], 0..) |*out_byte, j| {
+                const prev_xor_byte = if (i == 0) iv[j] else prev_block_in[j];
+                out_byte.* = block[j] ^ prev_xor_byte;
+            }
+            @memcpy(&prev_block_in, block_in);
         }
-        cbc_decryptor.decrypt(decrypted_padded, ciphertext);
 
         const pad_size = decrypted_padded[decrypted_padded.len - 1];
         if (pad_size == 0 or pad_size > 16 or decrypted_padded.len < pad_size) {
@@ -278,8 +354,9 @@ pub const CryptFilter = union(enum) {
     /// Dispatches the decryptData call to the active filter implementation.
     pub fn decryptData(self: @This(), num: u32, gen: u16, data: []const u8, allocator: Allocator) ![]u8 {
         return switch (self) {
-            .AES => |filter_instance| filter_instance.decryptData(@as(u24, @intCast(num)), gen, data, allocator),
-            .RC4 => |filter_instance| filter_instance.decryptData(@as(u24, @intCast(num)), gen, data, allocator),
+            // Note: AES/RC4 decryptData expect u24 for num
+            .AES => |filter_instance| filter_instance.decryptData(@truncate(num), gen, data, allocator),
+            .RC4 => |filter_instance| filter_instance.decryptData(@truncate(num), gen, data, allocator),
             .Identity => |filter_instance| filter_instance.decryptData(num, gen, data, allocator),
         };
     }
@@ -292,7 +369,7 @@ pub fn decryptObjects(
     filters: std.StringHashMap(CryptFilter),
     allocator: Allocator,
 ) !void {
-    var name_buffer: [128]u8 = undefined;
+    var name_buffer: [64]u8 = undefined;
     var tmp_allocator = std.heap.FixedBufferAllocator.init(&name_buffer);
 
     var it = streamObjects(objects);
@@ -303,39 +380,59 @@ pub fn decryptObjects(
 
         const filter_name_key = try PdfName.init_from_raw(tmp_allocator.allocator(), "Filter");
         defer filter_name_key.deinit(tmp_allocator.allocator());
-        if (try obj.get(&filter_name_key)) |filter_obj| {
-            var filter_list_items: []const PdfObject = undefined;
-            if (filter_obj.asArray()) |arr| {
-                filter_list_items = arr.items.items;
-            } else {
-                filter_list_items = &.{filter_obj.*};
-            }
 
+        const filter_objects_opt = try obj.get(&filter_name_key);
+        if (filter_objects_opt) |filter_obj| {
+            defer filter_obj.deinit(allocator);
             const crypt_name_key = try PdfName.init_from_raw(tmp_allocator.allocator(), "Crypt");
             defer crypt_name_key.deinit(tmp_allocator.allocator());
-            if (filter_list_items.len > 0 and filter_list_items[0].isName() and
-                (filter_list_items[0].asName().?.eql(crypt_name_key)))
-            {
+
+            var filter_is_crypt = false;
+
+            if (filter_obj.asArray()) |arr| {
+                if (arr.items.items.len > 0) {
+                    const first_item = &arr.items.items[0];
+                    if (first_item.* == .resolved) {
+                        if (first_item.resolved.isName() and first_item.resolved.asName().?.eql(crypt_name_key)) {
+                            filter_is_crypt = true;
+                        }
+                    } else return CryptError.InvalidArrayItemType;
+                }
+            } else {
+                if (filter_obj.isName() and filter_obj.asName().?.eql(crypt_name_key)) {
+                    filter_is_crypt = true;
+                }
+            }
+
+            if (filter_is_crypt) {
                 const parms_key_dp = try PdfName.init_from_raw(tmp_allocator.allocator(), "DP");
                 defer parms_key_dp.deinit(tmp_allocator.allocator());
                 const parms_key_decode = try PdfName.init_from_raw(tmp_allocator.allocator(), "DecodeParms");
                 defer parms_key_decode.deinit(tmp_allocator.allocator());
 
-                if ((try obj.get(&parms_key_decode)) orelse (try obj.get(&parms_key_dp))) |params_obj| {
+                const params_obj_opt = (try obj.get(&parms_key_decode)) orelse (try obj.get(&parms_key_dp));
+                if (params_obj_opt) |params_obj| {
+                    defer params_obj.deinit(allocator);
                     const params = params_obj.asDict() orelse return CryptError.DictKeyHasWrongType;
 
                     const name_key = try PdfName.init_from_raw(tmp_allocator.allocator(), "Name");
                     defer name_key.deinit(tmp_allocator.allocator());
-                    if (try params.get(&name_key)) |name_obj| {
+                    const name_obj_opt = try params.get(&name_key);
+                    if (name_obj_opt) |name_obj| {
+                        defer name_obj.deinit(allocator);
                         const name = name_obj.asName() orelse return CryptError.DictKeyHasWrongType;
                         const filter_name_slice = name.value[1..];
 
                         if (filters.get(filter_name_slice)) |new_filter_ptr| {
-                            current_filter = new_filter_ptr.*;
+                            current_filter = new_filter_ptr;
                         } else {
                             return CryptError.UnsupportedFilter;
                         }
+                    } else {
+                        return CryptError.MissingRequiredDictKey;
                     }
+                } else {
+                    return CryptError.MissingRequiredDictKey;
                 }
             }
         }
@@ -345,9 +442,9 @@ pub fn decryptObjects(
 
         const stream_to_decrypt = obj.stream orelse continue;
         const decrypted_data = try current_filter.decryptData(obj_num, obj_gen, stream_to_decrypt, allocator);
-        defer allocator.free(decrypted_data);
 
         try obj.setStream(decrypted_data);
+        allocator.free(decrypted_data);
 
         const decrypted_flag = PdfObject{ .Boolean = true };
         try obj.setPrivate("decrypted", decrypted_flag);
