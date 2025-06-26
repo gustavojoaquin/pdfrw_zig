@@ -103,7 +103,7 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
     defer encrypt_name.deinit(allocator);
     var encrypt_obj = (try doc.get(&encrypt_name)) orelse return CryptError.MissingEncryptDict;
     defer encrypt_obj.deinit(allocator);
-    const encrypt = encrypt_obj.asDict() orelse return CryptError.EncryptEntryNotADict;
+    var encrypt = encrypt_obj.asDict() orelse return CryptError.EncryptEntryNotADict;
 
     const length_name = try PdfName.init_from_raw(allocator, "Length");
     defer length_name.deinit(allocator);
@@ -114,18 +114,17 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
     const key_size_bits = if (length_obj) |obj| obj.asInt() orelse 40 else 40;
     const key_size: usize = @intCast(@divTrunc(key_size_bits, 8));
 
-    const padded_pass = blk: {
-        if (password.len >= 32) {
-            break :blk password[0..32];
-        }
-        var buf: [32]u8 = undefined;
-        @memcpy(buf[0..password.len], password);
-        @memcpy(buf[password.len..], PASSWORD_PAD[password.len..32]);
-        break :blk &buf;
+    var pass_buf: [32]u8 = undefined;
+    const padded_pass_slice: []const u8 = if (password.len >= 32)
+        password[0..32]
+    else blk: {
+        @memcpy(pass_buf[0..password.len], password);
+        @memcpy(pass_buf[password.len..32], PASSWORD_PAD[0 .. 32 - password.len]);
+        break :blk &pass_buf;
     };
 
     var md5 = Md5.init(.{});
-    md5.update(padded_pass);
+    md5.update(padded_pass_slice);
 
     const o_name = try PdfName.init_from_raw(allocator, "O");
     defer o_name.deinit(allocator);
@@ -149,11 +148,23 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
     defer id_name.deinit(allocator);
     var id_obj = (try doc.get(&id_name)) orelse return CryptError.InvalidID;
     defer id_obj.deinit(allocator);
+
     const id_array = id_obj.asArray() orelse return CryptError.DictKeyHasWrongType;
-    if (id_array.len() == 0) return CryptError.InvalidID;
-    const first_id_obj = try id_array.get(0);
-    const first_id_string = first_id_obj.asString() orelse return CryptError.DictKeyHasWrongType;
+    if (id_array.items.items.len == 0) return CryptError.InvalidID;
+    const first_item_obj = &id_array.items.items[0].resolved;
+    const first_id_string = first_item_obj.asString() orelse return CryptError.DictKeyHasWrongType;
     md5.update(first_id_string.rawBytes());
+
+    var encrypt_meta_name = try PdfName.init_from_raw(allocator, "EncryptMetadata");
+    defer encrypt_meta_name.deinit(allocator);
+    if (try encrypt.get(&encrypt_meta_name)) |meta_obj| {
+        if (meta_obj.asBoolean()) |is_encrypted| {
+            if (!is_encrypted) {
+                const ff_bytes = [_]u8{ 0xFF, 0xFF, 0xFF, 0xFF };
+                md5.update(&ff_bytes);
+            }
+        }
+    }
 
     var temp_hash: [16]u8 = undefined;
     md5.final(&temp_hash);
@@ -206,6 +217,7 @@ pub fn createUserHash(key: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
         const id_name = try PdfName.init_from_raw(allocator, "ID");
         defer id_name.deinit(allocator);
         const id_obj = (try doc.get(&id_name)) orelse return CryptError.InvalidID;
+
         const id_array = id_obj.asArray() orelse return CryptError.DictKeyHasWrongType;
         if (id_array.len() == 0) return CryptError.InvalidID;
         const first_id_obj = try id_array.get(0);

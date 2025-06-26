@@ -98,29 +98,37 @@ test "createKey with revision < 3" {
     const allocator = test_allocator;
 
     var encrypt_dict_ptr = try initPdfObjectDict();
+    defer {
+        encrypt_dict_ptr.deinit();
+        allocator.destroy(encrypt_dict_ptr);
+    }
 
     const O_bytes_content = try hexToBytes("8B2189FB081C443C78B13214C803F2C2");
     defer allocator.free(O_bytes_content);
 
-    try encrypt_dict_ptr.put(
-        try initPdfName("O"),
-        try initPdfObjectBytes(O_bytes_content),
-    );
+    var name_o = try initPdfName("O");
+    defer name_o.deinit(allocator);
 
-    try encrypt_dict_ptr.put(
-        try initPdfName("P"),
-        initPdfObjectInt(-132),
-    );
+    var obj_o = try initPdfObjectBytes(O_bytes_content);
+    defer obj_o.deinit(allocator);
 
-    try encrypt_dict_ptr.put(
-        try initPdfName("R"),
-        initPdfObjectInt(2),
-    );
+    try encrypt_dict_ptr.put(name_o, obj_o);
 
-    try encrypt_dict_ptr.put(
-        try initPdfName("Length"),
-        initPdfObjectInt(128),
-    );
+    var name_p = try initPdfName("P");
+    defer name_p.deinit(allocator);
+    const obj_p = initPdfObjectInt(-132);
+
+    try encrypt_dict_ptr.put(name_p, obj_p);
+
+    var name_r = try initPdfName("R");
+    defer name_r.deinit(allocator);
+    const obj_r = initPdfObjectInt(2);
+    try encrypt_dict_ptr.put(name_r, obj_r);
+
+    const name_length = try initPdfName("Length");
+    defer name_length.deinit(allocator);
+    const obj_length = initPdfObjectInt(128);
+    try encrypt_dict_ptr.put(name_length, obj_length);
 
     var doc_ptr = try initPdfObjectDict();
     defer {
@@ -129,19 +137,29 @@ test "createKey with revision < 3" {
     }
 
     const id_array_ptr = try initPdfObjectArray();
+    defer {
+        id_array_ptr.deinit();
+        allocator.destroy(id_array_ptr);
+    }
 
     const id_bytes_content = try hexToBytes("3F82E2596ED3A20B78B13214C803F2C2");
     defer allocator.free(id_bytes_content);
 
-    try id_array_ptr.appendObject(try initPdfObjectBytes(id_bytes_content));
+    var obj_id_bytes = try initPdfObjectBytes(id_bytes_content);
+    defer obj_id_bytes.deinit(allocator);
+    try id_array_ptr.appendObject(obj_id_bytes);
 
+    const name_id = try initPdfName("ID");
+    defer name_id.deinit(allocator);
     try doc_ptr.put(
-        try initPdfName("ID"),
+        name_id,
         PdfObject{ .Array = id_array_ptr },
     );
 
+    var name_encrypt = try initPdfName("Encrypt");
+    defer name_encrypt.deinit(allocator);
     try doc_ptr.put(
-        try initPdfName("Encrypt"),
+        name_encrypt,
         PdfObject{ .Dict = encrypt_dict_ptr },
     );
 
