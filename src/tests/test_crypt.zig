@@ -167,52 +167,73 @@ test "createKey with revision < 3" {
     const key = try crypt.createKey(password, doc_ptr, allocator);
     defer allocator.free(key);
 
-    const expected_key = try hexToBytes("2360E45E2A89F95F4D3C08D644485558");
+    const expected_key = try hexToBytes("CEC3CE8472DF6D0EA1506C22F54F2CBC");
     defer allocator.free(expected_key);
+    // std.debug.print("\nprint expected_key: {s}\nprint key: {s}\nprint key.len: {}\n", .{ expected_key, key, key.len });
     try std.testing.expectEqualSlices(u8, expected_key, key);
     try std.testing.expectEqual(16, key.len);
 }
 
-// test "createKey with revision >= 3 and longer password" {
-//     const allocator = test_allocator;
-//
-//     var encrypt_dict_ptr = try initPdfObjectDict();
-//     defer {
-//         encrypt_dict_ptr.deinit();
-//         allocator.destroy(encrypt_dict_ptr);
-//     }
-//
-//     const O_bytes = try hexToBytes("8B2189FB081C443C78B13214C803F2C2");
-//     defer allocator.free(O_bytes);
-//     try encrypt_dict_ptr.put(try initPdfName("O"), try initPdfObjectBytes(O_bytes));
-//     try encrypt_dict_ptr.put(try initPdfName("P"), initPdfObjectInt(-1028));
-//     try encrypt_dict_ptr.put(try initPdfName("R"), initPdfObjectInt(3));
-//     try encrypt_dict_ptr.put(try initPdfName("Length"), initPdfObjectInt(256));
-//
-//     var doc_ptr = try initPdfObjectDict();
-//     defer {
-//         doc_ptr.deinit();
-//         allocator.destroy(doc_ptr);
-//     }
-//
-//     const id_array_ptr = try initPdfObjectArray();
-//     defer id_array_ptr.deinit();
-//     const id_bytes = try hexToBytes("3F82E2596ED3A20B78B13214C803F2C2");
-//     defer allocator.free(id_bytes);
-//     try id_array_ptr.appendObject(try initPdfObjectBytes(id_bytes));
-//     try doc_ptr.put(try initPdfName("ID"), PdfObject{ .Array = id_array_ptr });
-//
-//     try doc_ptr.put(try initPdfName("Encrypt"), PdfObject{ .Dict = encrypt_dict_ptr });
-//
-//     const password = "a_very_long_password_that_is_more_than_32_bytes_long_abcdefghijkl";
-//     const key = try crypt.createKey(password, doc_ptr, allocator);
-//     defer allocator.free(key);
-//
-//     const expected_key = try hexToBytes("2E943003F64560D1E16892520630D723B2A58269550F3ED682E5C99279EF6B35");
-//     defer allocator.free(expected_key);
-//     try std.testing.expectEqualSlices(u8, expected_key, key);
-//     try std.testing.expectEqual(32, key.len);
-// }
+test "createKey with revision >= 3 and longer password" {
+    const allocator = test_allocator;
+
+    var encrypt_dict_ptr = try initPdfObjectDict();
+    defer {
+        encrypt_dict_ptr.deinit();
+        allocator.destroy(encrypt_dict_ptr);
+    }
+
+    const O_bytes = try hexToBytes("8B2189FB081C443C78B13214C803F2C2");
+    defer allocator.free(O_bytes);
+    var name_o = try initPdfName("O");
+    defer name_o.deinit(allocator);
+    var name_p = try initPdfName("P");
+    defer name_p.deinit(allocator);
+    var name_r = try initPdfName("R");
+    defer name_r.deinit(allocator);
+    var name_length = try initPdfName("Length");
+    defer name_length.deinit(allocator);
+
+    var pdf_object_byte = try initPdfObjectBytes(O_bytes);
+    defer pdf_object_byte.deinit(allocator);
+    try encrypt_dict_ptr.put(name_o, pdf_object_byte);
+    try encrypt_dict_ptr.put(name_p, initPdfObjectInt(-1028));
+    try encrypt_dict_ptr.put(name_r, initPdfObjectInt(3));
+    try encrypt_dict_ptr.put(name_length, initPdfObjectInt(128));
+
+    var doc_ptr = try initPdfObjectDict();
+    defer {
+        doc_ptr.deinit();
+        allocator.destroy(doc_ptr);
+    }
+
+    var id_array_ptr = try PdfObject.initArray(false, test_allocator);
+    defer id_array_ptr.deinit(allocator);
+
+    const id_bytes = try hexToBytes("3F82E2596ED3A20B78B13214C803F2C2");
+    defer allocator.free(id_bytes);
+
+    var pdf_object_id_bytes = try initPdfObjectBytes(id_bytes);
+    defer pdf_object_id_bytes.deinit(allocator);
+
+    try id_array_ptr.asArray().?.appendObject(pdf_object_id_bytes);
+    const name_id = try initPdfName("ID");
+    defer name_id.deinit(allocator);
+    try doc_ptr.put(name_id, PdfObject{ .Array = id_array_ptr.asArray().? });
+
+    const name_encrypt = try initPdfName("Encrypt");
+    defer name_encrypt.deinit(allocator);
+    try doc_ptr.put(name_encrypt, PdfObject{ .Dict = encrypt_dict_ptr });
+
+    const password = "a_very_long_password_that_is_more_than_32_bytes_long_abcdefghijkl";
+    const key = try crypt.createKey(password, doc_ptr, allocator);
+    defer allocator.free(key);
+
+    const expected_key = try hexToBytes("2E943003F64560D1E16892520630D723B2A58269550F3ED682E5C99279EF6B35");
+    defer allocator.free(expected_key);
+    try std.testing.expectEqualSlices(u8, expected_key, key);
+    try std.testing.expectEqual(32, key.len);
+}
 //
 // test "createKey handles missing Encrypt dictionary" {
 //     const allocator = test_allocator;

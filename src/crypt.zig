@@ -141,7 +141,8 @@ pub fn createKey(password: []const u8, doc: *PdfDict, allocator: Allocator) ![]u
     }
     const p_val: i32 = if (p_obj) |obj| @intCast(obj.asInt() orelse 0) else 0;
     var p_buf: [4]u8 = undefined;
-    std.mem.writeInt(i32, &p_buf, p_val, .little);
+    const p_unsigned = @as(u32, @bitCast(p_val));
+    std.mem.writeInt(u32, p_buf[0..], p_unsigned, .little);
     md5.update(&p_buf);
 
     const id_name = try PdfName.init_from_raw(allocator, "ID");
