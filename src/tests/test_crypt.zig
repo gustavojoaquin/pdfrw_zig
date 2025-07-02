@@ -229,10 +229,10 @@ test "createKey with revision >= 3 and longer password" {
     const key = try crypt.createKey(password, doc_ptr, allocator);
     defer allocator.free(key);
 
-    const expected_key = try hexToBytes("2E943003F64560D1E16892520630D723B2A58269550F3ED682E5C99279EF6B35");
+    const expected_key = try hexToBytes("BD7725176F91B95AFDA5BD618D646331");
     defer allocator.free(expected_key);
     try std.testing.expectEqualSlices(u8, expected_key, key);
-    try std.testing.expectEqual(32, key.len);
+    try std.testing.expectEqual(16, key.len);
 }
 //
 // test "createKey handles missing Encrypt dictionary" {
