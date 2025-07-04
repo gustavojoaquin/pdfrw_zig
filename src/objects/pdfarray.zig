@@ -51,7 +51,6 @@ pub const PdfArray = struct {
                 },
             }
         }
-        // TODO: fix errors in object tests
         self.items.deinit();
         self.allocator.destroy(self);
     }
@@ -198,7 +197,7 @@ pub const PdfArray = struct {
 
     /// Counts occurrences of a given PdfObject in the array.
     /// `item_to_count` is compared by value using `PdfObject.eql`.
-    pub fn count(self: *PdfArray, item_to_count: PdfObject) !u32 {
+    pub fn count(self: *PdfArray, item_to_count: *PdfObject) !u32 {
         try self.ensureAllItemsResolved();
         var c: u32 = 0;
 
@@ -253,12 +252,12 @@ pub const PdfArray = struct {
                 .unresolved => unreachable,
             };
 
-            const other_obj = switch (other_item_val) {
+            var other_obj = switch (other_item_val) {
                 .resolved => |resolved_obj| resolved_obj,
                 .unresolved => unreachable,
             };
 
-            if (!(try self_obj.eql(other_obj, self.allocator))) return false;
+            if (!(try self_obj.eql(&other_obj, self.allocator))) return false;
         }
 
         return true;

@@ -39,13 +39,7 @@ fn mockIndirectLoader(
     mock_obj_idx = (mock_obj_idx + 1) % 3;
 
     const obj_value = try PdfObject.initString(obj_val, allocator_l);
-
-    const obj_ptr = try allocator_l.create(PdfObject);
-    errdefer allocator_l.destroy(obj_ptr);
-
-    obj_ptr.* = obj_value;
-
-    return obj_ptr;
+    return obj_value;
 }
 
 fn resetMockLoaderFlags() void {
@@ -117,8 +111,8 @@ test "PdfArray.appendObject and get" {
     var obj2 = try PdfObject.initString("direct2", allocator);
     defer obj2.deinit(allocator);
 
-    try arr.appendObject(obj1);
-    try arr.appendObject(obj2);
+    try arr.appendObject(obj1.*);
+    try arr.appendObject(obj2.*);
 
     try std.testing.expectEqual(arr.len(), 2);
     try std.testing.expectEqual(arr.all_items_resolved_attempted, false);
@@ -148,7 +142,7 @@ test "PdfArray.extend" {
 
     const items_to_extend: []const PdfArrayItem = &[_]PdfArrayItem{
         .{ .unresolved = &indirect1 },
-        .{ .resolved = obj1 },
+        .{ .resolved = obj1.* },
     };
 
     try arr.extend(items_to_extend);
@@ -186,7 +180,7 @@ test "PdfArray.pop" {
     defer obj1.deinit(allocator);
 
     try arr.appendIndirect(&indirect1);
-    try arr.appendObject(obj1);
+    try arr.appendObject(obj1.*);
     try arr.appendIndirect(&indirect2);
 
     try std.testing.expectEqual(arr.len(), 3);
@@ -247,7 +241,7 @@ test "PdfArray.iterator" {
     defer obj1.deinit(allocator);
 
     try arr.appendIndirect(&indirect1);
-    try arr.appendObject(obj1);
+    try arr.appendObject(obj1.*);
     try arr.appendIndirect(&indirect2);
 
     try std.testing.expectEqual(arr.all_items_resolved_attempted, false);
@@ -307,9 +301,9 @@ test "PdfArray.count" {
     defer obj_other.deinit(allocator);
 
     try arr.appendIndirect(&indirect1);
-    try arr.appendObject(obj_other);
+    try arr.appendObject(obj_other.*);
     try arr.appendIndirect(&indirect2);
-    try arr.appendObject(obj0);
+    try arr.appendObject(obj0.*);
     try arr.appendIndirect(&indirect3);
     try arr.appendIndirect(&indirect4);
 
@@ -380,4 +374,3 @@ test "PdfArray.ensureResolved with loader returning null" {
     const item1_ptr = try arr.get(1);
     try std.testing.expect(item1_ptr.getTag() == .Null);
 }
-

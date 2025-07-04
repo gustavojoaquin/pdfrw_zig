@@ -66,23 +66,31 @@ pub const PdfObject = union(enum) {
         return ptr;
     }
 
-    pub fn initNull() PdfObject {
-        return PdfObject{ .Null = {} };
+    pub fn initNull(allocator: Allocator) !*PdfObject {
+        const null_obj_ptr = try allocator.create(PdfObject);
+        null_obj_ptr.* = .{ .Null = {} };
+        return null_obj_ptr;
     }
-    pub fn initBoolean(val: bool) PdfObject {
-        return PdfObject{ .Boolean = val };
+    pub fn initBoolean(val: bool, allocator: Allocator) !*PdfObject {
+        const bool_object_ptr = try allocator.create(PdfObject);
+        bool_object_ptr.* = .{ .Boolean = val };
+        return bool_object_ptr;
     }
 
-    pub fn initInteger(val: i64) PdfObject {
-        return PdfObject{ .Integer = val };
+    pub fn initInteger(val: i64, allocator: Allocator) !*PdfObject {
+        const integer_object_ptr = try allocator.create(PdfObject);
+        integer_object_ptr.* = .{ .Integer = val };
+        return integer_object_ptr;
     }
 
     pub fn initReal(val: f64) PdfObject {
         return PdfObject{ .Real = val };
     }
 
-    pub fn initString(val: []const u8, allocator: Allocator) PdfError!PdfObject {
-        return PdfObject{ .String = try PdfString.fromBytes(allocator, val, .literal) };
+    pub fn initString(val: []const u8, allocator: Allocator) PdfError!*PdfObject {
+        const pdf_string_ptr = try allocator.create(PdfObject);
+        pdf_string_ptr.* = .{ .String = try PdfString.fromBytes(allocator, val, .literal) };
+        return pdf_string_ptr;
     }
 
     pub fn initName(val: []const u8, allocator: Allocator) !PdfObject {
@@ -104,8 +112,8 @@ pub const PdfObject = union(enum) {
         return PdfObject{ .IndirectRef = ref };
     }
 
-    pub fn eql(self: PdfObject, other: PdfObject, allocator: Allocator) PdfError!bool {
-        if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
+    pub fn eql(self: PdfObject, other: *PdfObject, allocator: Allocator) PdfError!bool {
+        if (std.meta.activeTag(self) != std.meta.activeTag(other.*)) return false;
 
         return switch (self) {
             .Null => true,

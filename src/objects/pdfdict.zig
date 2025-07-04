@@ -315,8 +315,8 @@ pub const PdfDict = struct {
             defer if (other_resolved_obj_ptr != null) other_resolved_obj_ptr.?.deinit(self.allocator);
 
             if (self_resolved_obj_ptr) |self_val| {
-                if (other_resolved_obj_ptr) |other_val| {
-                    if (!(try self_val.eql(other_val, self.allocator))) return false;
+                if (other_resolved_obj_ptr != null)  {
+                    if (!(try self_val.eql(&other_resolved_obj_ptr.?, self.allocator))) return false;
                 } else return false;
             } else {
                 if (other_resolved_obj_ptr != null) return false;
@@ -327,8 +327,8 @@ pub const PdfDict = struct {
     }
 };
 
-pub fn createIndirectPdfDict(allocator: Allocator) PdfDict {
-    var dict = PdfDict.init(allocator);
-    dict.indirect = true;
+pub fn createIndirectPdfDict(allocator: Allocator) !*PdfDict {
+    const dict = try PdfDict.init(allocator);
+    dict.*.indirect = true;
     return dict;
 }

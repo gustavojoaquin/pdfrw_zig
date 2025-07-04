@@ -13,10 +13,8 @@ const allocator = std.testing.allocator;
 fn mockLoaderNull(
     _: *PdfIndirect,
     alloc: std.mem.Allocator,
-) PdfError!?*pdfobject.PdfObject {
-    const obj_ptr = try alloc.create(PdfObject);
-    obj_ptr.* = PdfObject.initNull();
-    return obj_ptr;
+) PdfError!?*PdfObject {
+    return try PdfObject.initNull(alloc);
 }
 
 fn mockLoaderInt(
@@ -29,24 +27,29 @@ fn mockLoaderInt(
 }
 
 test "PdfPbject initialization" {
-    const null_obj = PdfObject.initNull();
-    try std.testing.expect(null_obj == .Null);
+    const null_obj = try PdfObject.initNull(allocator);
+    defer null_obj.deinit(allocator);
+    try std.testing.expect(null_obj.* == .Null);
 
-    const true_obj = PdfObject.initBoolean(true);
-    try std.testing.expect(true_obj == .Boolean and true_obj.Boolean == true);
+    const true_obj = try PdfObject.initBoolean(true, allocator);
+    defer true_obj.deinit(allocator);
+    try std.testing.expect(true_obj.* == .Boolean and true_obj.Boolean == true);
 
-    const false_obj = PdfObject.initBoolean(false);
-    try std.testing.expect(false_obj == .Boolean and false_obj.Boolean == false);
+    const false_obj = try PdfObject.initBoolean(false, allocator);
+    defer false_obj.deinit(allocator);
+    try std.testing.expect(false_obj.* == .Boolean and false_obj.Boolean == false);
 
-    const int_obj = PdfObject.initInteger(42);
+    const int_obj = try PdfObject.initInteger(42, allocator);
+    defer int_obj.deinit(allocator);
     try std.testing.expect(int_obj == .Integer and int_obj.Integer == 42);
 
     const real_obj = PdfObject.initReal(3.14);
+    defer real_obj.deinit(allocator);
     try std.testing.expect(real_obj == .Real and real_obj.Real == 3.14);
 
     var string_obj = try PdfObject.initString("hello", allocator);
     defer string_obj.deinit(allocator);
-    try std.testing.expect(string_obj == .String and std.mem.eql(u8, string_obj.String.encoded_bytes, "(hello)"));
+    try std.testing.expect(string_obj.* == .String and std.mem.eql(u8, string_obj.String.encoded_bytes, "(hello)"));
 
     var name_obj = try PdfObject.initName("Name", allocator);
     defer name_obj.deinit(allocator);
@@ -58,31 +61,31 @@ test "PdfPbject initialization" {
 
     var dict_obj = try PdfObject.initDict(allocator);
     defer dict_obj.deinit(allocator);
-    try std.testing.expect(dict_obj == .Dict);
+    try std.testing.expect(dict_obj.* == .Dict);
 }
 
 test "PdfObject eql" {
     const pdfstring = @import("../pdfstring.zig");
     defer pdfstring.deinitPdfDocEncoding();
 
-    var null1 = PdfObject.initNull();
-    var null2 = PdfObject.initNull();
+    var null1 = try PdfObject.initNull(allocator);
+    var null2 = try PdfObject.initNull(allocator);
     defer {
         null1.deinit(allocator);
         null2.deinit(allocator);
     }
     try std.testing.expect(try null1.eql(null2, allocator));
 
-    var true1 = PdfObject.initBoolean(true);
-    var true2 = PdfObject.initBoolean(true);
+    var true1 = try PdfObject.initBoolean(true, allocator);
+    var true2 = try PdfObject.initBoolean(true, allocator);
     defer {
         true1.deinit(allocator);
         true2.deinit(allocator);
     }
     try std.testing.expect(try true1.eql(true2, allocator));
 
-    var false1 = PdfObject.initBoolean(false);
-    var false2 = PdfObject.initBoolean(false);
+    var false1 = try PdfObject.initBoolean(false, allocator);
+    var false2 = try PdfObject.initBoolean(false, allocator);
     defer {
         false1.deinit(allocator);
         false2.deinit(allocator);
@@ -90,16 +93,16 @@ test "PdfObject eql" {
     try std.testing.expect(try false1.eql(false2, allocator));
     try std.testing.expect(!try false1.eql(true1, allocator));
 
-    var int1 = PdfObject.initInteger(100);
-    var int2 = PdfObject.initInteger(100);
-    var int3 = PdfObject.initInteger(200);
+    var int1 = try PdfObject.initInteger(100, allocator);
+    var int2 = try PdfObject.initInteger(100, allocator);
+    var int3 = try PdfObject.initInteger(200, allocator);
     defer {
         int1.deinit(allocator);
         int2.deinit(allocator);
         int3.deinit(allocator);
     }
-    try std.testing.expect(try int1.eql(int2, allocator));
-    try std.testing.expect(!(try int1.eql(int3, allocator)));
+    try std.testing.expect(try int1.eql(&int2, allocator));
+    try std.testing.expect(!(try int1.eql(&int3, allocator)));
 
     var str1 = try PdfObject.initString("abc", allocator);
     var str2 = try PdfObject.initString("abc", allocator);
@@ -120,8 +123,8 @@ test "PdfObject eql" {
         name2.deinit(allocator);
         name3.deinit(allocator);
     }
-    try std.testing.expect(try name1.eql(name2, allocator));
-    try std.testing.expect(!(try name1.eql(name3, allocator)));
+    try std.testing.expect(try name1.eql(&name2, allocator));
+    try std.testing.expect(!(try name1.eql(&name3, allocator)));
 
     var arr1 = try PdfObject.initArray(false, allocator);
     defer arr1.deinit(allocator);
@@ -135,8 +138,8 @@ test "PdfObject eql" {
     defer arr3.deinit(allocator);
     try arr3.Array.appendObject(PdfObject.initInteger(3));
 
-    try std.testing.expect(try arr1.eql(arr2, allocator));
-    try std.testing.expect(!(try arr1.eql(arr3, allocator)));
+    try std.testing.expect(try arr1.eql(&arr2, allocator));
+    try std.testing.expect(!(try arr1.eql(&arr3, allocator)));
 
     const key = try PdfName.init_from_raw(allocator, "key");
     defer key.deinit(allocator);
@@ -166,12 +169,12 @@ test "PdfObject eql" {
     var indirect3 = PdfIndirect.init(2, 0, &mockLoaderNull);
     defer indirect3.deinit(allocator);
 
-    const ref1 = PdfObject.initIndirectRef(&indirect1);
-    const ref2 = PdfObject.initIndirectRef(&indirect2);
-    const ref3 = PdfObject.initIndirectRef(&indirect3);
+    var ref1 = PdfObject.initIndirectRef(&indirect1);
+    var ref2 = PdfObject.initIndirectRef(&indirect2);
+    var ref3 = PdfObject.initIndirectRef(&indirect3);
 
-    try std.testing.expect(try ref1.eql(ref2, allocator));
-    try std.testing.expect(!(try ref1.eql(ref3, allocator)));
+    try std.testing.expect(try ref1.eql(&ref2, allocator));
+    try std.testing.expect(!(try ref1.eql(&ref3, allocator)));
 }
 
 test "PdfObject clone" {
@@ -179,7 +182,7 @@ test "PdfObject clone" {
     var int_orig = PdfObject.initInteger(123);
     var int_clone = try int_orig.clone(allocator);
     defer int_clone.deinit(allocator);
-    try std.testing.expect(try int_orig.eql(int_clone, allocator));
+    try std.testing.expect(try int_orig.eql(&int_clone, allocator));
     int_orig.Integer = 456;
     try std.testing.expect(int_clone.Integer == 123);
 
@@ -188,7 +191,7 @@ test "PdfObject clone" {
     defer name_orig.deinit(allocator);
     var name_clone = try name_orig.clone(allocator);
     defer name_clone.deinit(allocator);
-    try std.testing.expect(try name_orig.eql(name_clone, allocator));
+    try std.testing.expect(try name_orig.eql(&name_clone, allocator));
     try std.testing.expect(name_orig.Name.value.ptr != name_clone.Name.value.ptr);
 
     // Array (owns a pointer)
@@ -197,7 +200,7 @@ test "PdfObject clone" {
     try arr_orig.Array.appendObject(PdfObject.initInteger(1));
     var arr_clone = try arr_orig.clone(allocator);
     defer arr_clone.deinit(allocator);
-    try std.testing.expect(try arr_orig.eql(arr_clone, allocator));
+    try std.testing.expect(try arr_orig.eql(&arr_clone, allocator));
 
     try arr_orig.Array.appendObject(PdfObject.initInteger(2));
     try std.testing.expect(arr_orig.Array.len() == 2);
@@ -212,7 +215,7 @@ test "PdfObject clone" {
 
     var dict_clone = try dict_orig.clone(allocator);
     defer dict_clone.deinit(allocator);
-    try std.testing.expect(try dict_orig.eql(dict_clone, allocator));
+    try std.testing.expect(try dict_orig.eql(&dict_clone, allocator));
 
     // Modify original dict, clone should be unaffected
     const key2 = try PdfName.init_from_raw(allocator, "key2");
@@ -232,7 +235,7 @@ test "PdfObject clone" {
     var indirect_clone = try indirect_orig.clone(allocator);
     defer indirect_clone.deinit(allocator);
 
-    try std.testing.expect(try indirect_orig.eql(indirect_clone, allocator));
+    try std.testing.expect(try indirect_orig.eql(&indirect_clone, allocator));
     try std.testing.expect(indirect_orig.IndirectRef == indirect_clone.IndirectRef);
 }
 

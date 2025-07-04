@@ -26,7 +26,7 @@ test "PdfDict indirect set and get" {
     var indirect_obj_instance = PdfIndirect.init(indirect_obj_num, indirect_gen_num, test_loader_returns_int_42);
     defer indirect_obj_instance.deinit(allocator);
 
-    var dict = PdfDict.init(allocator);
+    var dict = try PdfDict.init(allocator);
     defer dict.deinit();
 
     var name_key = try PdfName.init_from_raw(allocator, "Name");
@@ -62,7 +62,7 @@ test "PdfDict indirect set and get" {
 }
 
 test "PdfDict private attributes" {
-    var dict = PdfDict.init(allocator);
+    var dict = try PdfDict.init(allocator);
     defer dict.deinit();
 
     try dict.setPrivate("internal_id", .{ .Integer = 12345 });
@@ -75,16 +75,16 @@ test "PdfDict private attributes" {
 }
 
 test "PdfDict inheritance lookup" {
-    var parent = PdfDict.init(allocator);
+    var parent = try PdfDict.init(allocator);
     defer parent.deinit();
 
     var rotate_key = try PdfName.init_from_raw(allocator, "Rotate");
     defer rotate_key.deinit(allocator);
     try parent.put(rotate_key, .{ .Integer = 90 });
 
-    var child = PdfDict.init(allocator);
+    var child = try PdfDict.init(allocator);
     defer child.deinit();
-    child.parent = &parent;
+    child.parent = parent;
 
     const rotate_opt = try child.getInheritable(rotate_key);
     try testing.expect(rotate_opt != null);
@@ -96,7 +96,7 @@ test "PdfDict inheritance lookup" {
 }
 
 test "PdfDict stream handling" {
-    var dict = PdfDict.init(allocator);
+    var dict = try PdfDict.init(allocator);
     defer dict.deinit();
 
     const data = "stream data";
@@ -118,7 +118,7 @@ test "PdfDict stream handling" {
 }
 
 test "PdfDict indirect dictionary" {
-    var indirect_dict = pdfdict.createIndirectPdfDict(allocator);
+    var indirect_dict = try pdfdict.createIndirectPdfDict(allocator);
     defer indirect_dict.deinit();
     try testing.expect(indirect_dict.indirect == true);
 }
