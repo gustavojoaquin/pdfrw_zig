@@ -33,11 +33,11 @@ pub const PdfObject = union(enum) {
             .Name => |*n| n.deinit(allocator),
             .Array => |a_ptr| {
                 a_ptr.deinit();
-                allocator.destroy(a_ptr);
+                // allocator.destroy(a_ptr);
             },
             .Dict => |d_ptr| {
                 d_ptr.deinit();
-                allocator.destroy(d_ptr);
+                // allocator.destroy(d_ptr);
             },
             .IndirectRef => |iptr| {
                 _ = iptr;
@@ -93,10 +93,11 @@ pub const PdfObject = union(enum) {
         return PdfObject{ .Array = try PdfArray.init(allocator, initial_indirect) };
     }
 
-    pub fn initDict(allocator: Allocator) !PdfObject {
-        const dict_ptr = try allocator.create(PdfDict);
-        dict_ptr.* = PdfDict.init(allocator);
-        return PdfObject{ .Dict = dict_ptr };
+    pub fn initDict(allocator: Allocator) !*PdfObject {
+        const dict_ptr = try PdfDict.init(allocator);
+        const return_pdf_dict = try allocator.create(PdfObject);
+        return_pdf_dict.* = .{ .Dict = dict_ptr };
+        return return_pdf_dict;
     }
 
     pub fn initIndirectRef(ref: *PdfIndirect) PdfObject {

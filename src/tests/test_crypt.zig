@@ -36,12 +36,6 @@ fn initPdfObjectBytes(val: []const u8) !PdfObject {
     return try PdfObject.initString(val, test_allocator);
 }
 
-/// Creates a Dictionary PdfObject for testing.
-fn initPdfObjectDict() !*PdfDict {
-    const dict_obj = try PdfObject.initDict(test_allocator);
-    return dict_obj.Dict;
-}
-
 /// Creates an Array PdfObject for testing.
 fn initPdfObjectArray() !*PdfArray {
     const array_obj = try PdfObject.initArray(false, test_allocator);
@@ -66,27 +60,27 @@ fn hexToBytes(hex_str: []const u8) error{ OutOfMemory, ParseIntError, InvalidCha
 }
 
 test "streamObjects iterates only stream-containing PdfDicts" {
-    var dict1_val = PdfDict.init(test_allocator);
+    var dict1_val = try PdfDict.init(test_allocator);
     defer dict1_val.deinit();
-    var dict2_val = PdfDict.init(test_allocator);
+    var dict2_val = try PdfDict.init(test_allocator);
     defer dict2_val.deinit();
-    var dict3_val = PdfDict.init(test_allocator);
+    var dict3_val = try PdfDict.init(test_allocator);
     defer dict3_val.deinit();
 
     try dict1_val.setStream("stream content 1");
     try dict2_val.setStream(null);
     try dict3_val.setStream("stream content 2");
 
-    var pdf_dicts = [_]PdfDict{ dict1_val, dict2_val, dict3_val };
+    var pdf_dicts = [_]*PdfDict{ dict1_val, dict2_val, dict3_val };
     var it = crypt.streamObjects(pdf_dicts[0..]);
 
     var count: usize = 0;
     while (it.next()) |obj_ptr| {
         if (count == 0) {
-            try std.testing.expect(obj_ptr == &pdf_dicts[0]);
+            try std.testing.expect(obj_ptr == pdf_dicts[0]);
             try std.testing.expectEqualStrings("stream content 1", obj_ptr.stream.?);
         } else if (count == 1) {
-            try std.testing.expect(obj_ptr == &pdf_dicts[2]);
+            try std.testing.expect(obj_ptr == pdf_dicts[2]);
             try std.testing.expectEqualStrings("stream content 2", obj_ptr.stream.?);
         }
         count += 1;
@@ -97,11 +91,8 @@ test "streamObjects iterates only stream-containing PdfDicts" {
 test "createKey with revision < 3" {
     const allocator = test_allocator;
 
-    var encrypt_dict_ptr = try initPdfObjectDict();
-    defer {
-        encrypt_dict_ptr.deinit();
-        allocator.destroy(encrypt_dict_ptr);
-    }
+    var encrypt_dict_ptr = try PdfDict.init(allocator);
+    defer encrypt_dict_ptr.deinit();
 
     const O_bytes_content = try hexToBytes("8B2189FB081C443C78B13214C803F2C2");
     defer allocator.free(O_bytes_content);
@@ -130,17 +121,11 @@ test "createKey with revision < 3" {
     const obj_length = initPdfObjectInt(128);
     try encrypt_dict_ptr.put(name_length, obj_length);
 
-    var doc_ptr = try initPdfObjectDict();
-    defer {
-        doc_ptr.deinit();
-        allocator.destroy(doc_ptr);
-    }
+    var doc_ptr = try PdfDict.init(allocator);
+    defer doc_ptr.deinit();
 
-    const id_array_ptr = try initPdfObjectArray();
-    defer {
-        id_array_ptr.deinit();
-        allocator.destroy(id_array_ptr);
-    }
+    var id_array_ptr = (try PdfObject.initArray(false, allocator)).Array;
+    defer id_array_ptr.deinit();
 
     const id_bytes_content = try hexToBytes("3F82E2596ED3A20B78B13214C803F2C2");
     defer allocator.free(id_bytes_content);
@@ -177,11 +162,8 @@ test "createKey with revision < 3" {
 test "createKey with revision >= 3 and longer password" {
     const allocator = test_allocator;
 
-    var encrypt_dict_ptr = try initPdfObjectDict();
-    defer {
-        encrypt_dict_ptr.deinit();
-        allocator.destroy(encrypt_dict_ptr);
-    }
+    var encrypt_dict_ptr = try PdfDict.init(allocator);
+    defer encrypt_dict_ptr.deinit();
 
     const O_bytes = try hexToBytes("8B2189FB081C443C78B13214C803F2C2");
     defer allocator.free(O_bytes);
@@ -201,11 +183,8 @@ test "createKey with revision >= 3 and longer password" {
     try encrypt_dict_ptr.put(name_r, initPdfObjectInt(3));
     try encrypt_dict_ptr.put(name_length, initPdfObjectInt(128));
 
-    var doc_ptr = try initPdfObjectDict();
-    defer {
-        doc_ptr.deinit();
-        allocator.destroy(doc_ptr);
-    }
+    var doc_ptr = try PdfDict.init(allocator);
+    defer doc_ptr.deinit();
 
     var id_array_ptr = try PdfObject.initArray(false, test_allocator);
     defer id_array_ptr.deinit(allocator);

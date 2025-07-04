@@ -53,7 +53,7 @@ pub const PdfArray = struct {
         }
         // TODO: fix errors in object tests
         self.items.deinit();
-        // self.allocator.destroy(self);
+        self.allocator.destroy(self);
     }
 
     /// Ensures all items in the array are resolved.

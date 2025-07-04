@@ -64,14 +64,16 @@ pub const PdfDict = struct {
     indirect_num: ?u32 = null,
     indirect_gen: ?u16 = null,
 
-    pub fn init(allocator: Allocator) PdfDict {
-        return .{
+    pub fn init(allocator: Allocator) !*PdfDict {
+        const self = try allocator.create(PdfDict);
+        self.* = .{
             .allocator = allocator,
             .map = std.HashMap(*const PdfName, *PdfObject, PdfDictMapContextMap, std.hash_map.default_max_load_percentage).init(allocator),
             .private_attrs = std.StringHashMap(*PdfObject).init(allocator),
             .indirect_num = null,
             .indirect_gen = null,
         };
+        return self;
     }
 
     pub fn deinit(self: *PdfDict) void {
@@ -88,6 +90,7 @@ pub const PdfDict = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.private_attrs.deinit();
+        self.allocator.destroy(self);
     }
 
     pub fn put(self: *PdfDict, key: PdfName, value: ?PdfObject) !void {
@@ -205,16 +208,12 @@ pub const PdfDict = struct {
     }
 
     pub fn copy(self: *const PdfDict) PdfError!*PdfDict {
-        const new_dict_ptr = try self.allocator.create(PdfDict);
-        new_dict_ptr.* = PdfDict.init(self.allocator);
-        errdefer {
-            new_dict_ptr.deinit();
-            self.allocator.destroy(new_dict_ptr);
-        }
+        const new_dict_ptr = try PdfDict.init(self.allocator);
+        errdefer new_dict_ptr.deinit();
 
         new_dict_ptr.indirect = self.indirect;
-        new_dict_ptr.indirect_num = self.indirect_num; 
-        new_dict_ptr.indirect_gen = self.indirect_gen; 
+        new_dict_ptr.indirect_num = self.indirect_num;
+        new_dict_ptr.indirect_gen = self.indirect_gen;
 
         if (self.stream) |s| {
             new_dict_ptr.stream = try self.allocator.dupe(u8, s);

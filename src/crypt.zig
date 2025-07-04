@@ -76,14 +76,14 @@ pub const CryptError = error{
 
 /// Iterator for objects that have a stream to be processed.
 pub const StreamIterator = struct {
-    list: []PdfDict,
+    list: []*PdfDict,
     index: usize = 0,
 
     pub fn next(it: *StreamIterator) ?*PdfDict {
         while (it.index < it.list.len) {
             const i = it.index;
             it.index += 1;
-            const obj = &it.list[i];
+            const obj = it.list[i];
             if (obj.stream != null) {
                 return obj;
             }
@@ -92,7 +92,7 @@ pub const StreamIterator = struct {
     }
 };
 
-pub fn streamObjects(list: []PdfDict) StreamIterator {
+pub fn streamObjects(list: []*PdfDict) StreamIterator {
     return .{ .list = list };
 }
 
